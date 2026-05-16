@@ -211,7 +211,7 @@ server <- function(input, output, session) {
 
   output$full_summary <- renderTable({
     params <- c("beta_pfx_x", "beta_pfx_z", "beta_speed", "beta_label",
-                "mu_alpha", "sigma_alpha")
+                "mu_alpha", "tau_alpha")
     s <- selected_fit()$summary[params, c("mean", "sd", "2.5%", "97.5%"),
                                 drop = FALSE]
     as.data.frame(round(s, 4)) |>

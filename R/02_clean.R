@@ -83,7 +83,7 @@ clean <- raw |>
   select(
     game_date, pitcher, pitcher_id, batter, pitch_type, label_si,
     p_throws, stand,
-    release_speed, pfx_x, pfx_z, pfx_x_adj,
+    release_speed, release_spin_rate, pfx_x, pfx_z, pfx_x_adj,
     pfx_x_z, pfx_z_z, speed_z,
     description, events,
     ground_ball, whiff, woba

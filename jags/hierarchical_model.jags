@@ -1,44 +1,38 @@
 # hierarchical_model.jags
-# Bayesian hierarchical logistic/linear regression for one outcome at a time.
+# Bayesian hierarchical logistic regression for binary outcomes
+# (ground_ball, whiff).
 #
-# Predictors (all pitcher-pitch level):
-#   pfx_x_z  – arm-side movement, standardized
-#   pfx_z_z  – vertical movement, standardized
+# Predictors:
+#   pfx_x_z  – arm-side movement, standardized (sign-flipped for LHP)
+#   pfx_z_z  – induced vertical break, standardized
 #   speed_z  – release speed, standardized
-#   label_si – 1 if Statcast calls the pitch SI, 0 if FT  (THE ESTIMAND)
+#   label_si – 1 = SI, 0 = FT  (THE KEY ESTIMAND)
 #
-# Random effect: pitcher-level intercept (alpha[j]).
-# Outcome: passed in as Y[], which is binary (ground_ball or whiff) or
-#          continuous (woba).  The calling R code picks the right likelihood.
+# Random effect: pitcher-level intercept alpha[j], partially pooled.
 #
-# Precision parameterization: tau = 1 / sigma^2.
+# Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
+# fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
 
 model {
-  # Likelihood
   for (i in 1:N) {
-    # logit link for binary outcomes; swap to dnorm for wOBA (set by R wrapper)
     logit(p[i]) <- alpha[pitcher_id[i]] +
-                   beta_pfx_x  * pfx_x_z[i]  +
-                   beta_pfx_z  * pfx_z_z[i]  +
-                   beta_speed  * speed_z[i]   +
-                   beta_label  * label_si[i]
+                   beta_pfx_x * pfx_x_z[i] +
+                   beta_pfx_z * pfx_z_z[i] +
+                   beta_speed * speed_z[i]  +
+                   beta_label * label_si[i]
 
     Y[i] ~ dbern(p[i])
   }
 
-  # Pitcher random intercepts
   for (j in 1:J) {
     alpha[j] ~ dnorm(mu_alpha, tau_alpha)
   }
 
-  # Hyperpriors
-  mu_alpha   ~ dnorm(0, 0.25)        # SD ~ 2 on logit scale — weakly informative
-  tau_alpha  <- pow(sigma_alpha, -2)
-  sigma_alpha ~ dunif(0, 5)
+  mu_alpha  ~ dnorm(0, 0.001)
+  tau_alpha ~ dgamma(0.001, 0.001)
 
-  # Fixed-effect priors — weakly informative Normal(0, 1) on logit scale.
-  beta_pfx_x ~ dnorm(0, 1)
-  beta_pfx_z ~ dnorm(0, 1)
-  beta_speed ~ dnorm(0, 1)
-  beta_label ~ dnorm(0, 1)          # THIS IS THE KEY ESTIMAND
+  beta_pfx_x ~ dnorm(0, 0.001)
+  beta_pfx_z ~ dnorm(0, 0.001)
+  beta_speed ~ dnorm(0, 0.001)
+  beta_label ~ dnorm(0, 0.001)
 }

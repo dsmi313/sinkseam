@@ -1,34 +1,32 @@
 # hierarchical_model_linear.jags
-# Same structure as hierarchical_model.jags but with a Gaussian likelihood for
-# continuous outcomes (wOBA against). Only rows where woba is non-missing are
-# passed in, so N reflects plate-appearance-ending pitches only.
+# Bayesian hierarchical linear regression for continuous outcomes (wOBA against).
+# Only plate-appearance-ending pitches are passed in (N < total pitches).
+#
+# Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
+# fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
 
 model {
   for (i in 1:N) {
-    Y[i] ~ dnorm(mu[i], tau_y)
+    Y[i] ~ dnorm(mu[i], tau)
 
     mu[i] <- alpha[pitcher_id[i]] +
-              beta_pfx_x  * pfx_x_z[i]  +
-              beta_pfx_z  * pfx_z_z[i]  +
-              beta_speed  * speed_z[i]   +
-              beta_label  * label_si[i]
+              beta_pfx_x * pfx_x_z[i] +
+              beta_pfx_z * pfx_z_z[i] +
+              beta_speed * speed_z[i]  +
+              beta_label * label_si[i]
   }
 
-  # Observation-level precision
-  tau_y        <- pow(sigma_y, -2)
-  sigma_y      ~ dunif(0, 5)
+  tau ~ dgamma(0.001, 0.001)
 
-  # Pitcher random intercepts
   for (j in 1:J) {
     alpha[j] ~ dnorm(mu_alpha, tau_alpha)
   }
 
-  mu_alpha     ~ dnorm(0, 0.25)
-  tau_alpha    <- pow(sigma_alpha, -2)
-  sigma_alpha  ~ dunif(0, 5)
+  mu_alpha  ~ dnorm(0, 0.001)
+  tau_alpha ~ dgamma(0.001, 0.001)
 
-  beta_pfx_x  ~ dnorm(0, 1)
-  beta_pfx_z  ~ dnorm(0, 1)
-  beta_speed  ~ dnorm(0, 1)
-  beta_label  ~ dnorm(0, 1)
+  beta_pfx_x ~ dnorm(0, 0.001)
+  beta_pfx_z ~ dnorm(0, 0.001)
+  beta_speed ~ dnorm(0, 0.001)
+  beta_label ~ dnorm(0, 0.001)
 }

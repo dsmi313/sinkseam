@@ -61,15 +61,15 @@ make_jags_data_continuous <- function(df) {
 }
 
 params_monitor <- c("beta_pfx_x", "beta_pfx_z", "beta_speed", "beta_label",
-                    "mu_alpha", "sigma_alpha")
+                    "mu_alpha", "tau_alpha")
 
 inits_fn <- function() list(
-  beta_pfx_x  = rnorm(1, 0, 0.1),
-  beta_pfx_z  = rnorm(1, 0, 0.1),
-  beta_speed  = rnorm(1, 0, 0.1),
-  beta_label  = rnorm(1, 0, 0.1),
-  mu_alpha    = rnorm(1, 0, 0.1),
-  sigma_alpha = runif(1, 0.5, 1.5)
+  beta_pfx_x = rnorm(1, 0, 0.1),
+  beta_pfx_z = rnorm(1, 0, 0.1),
+  beta_speed = rnorm(1, 0, 0.1),
+  beta_label = rnorm(1, 0, 0.1),
+  mu_alpha   = rnorm(1, 0, 0.1),
+  tau_alpha  = rgamma(1, 1, 1)
 )
 
 run_model <- function(jags_data, model_file, params, n_chains = 3,
@@ -131,7 +131,7 @@ report_label(fit_wh, "whiff")
 message("Fitting Model C: wOBA against...")
 data_woba <- make_jags_data_continuous(clean)
 fit_woba  <- run_model(data_woba, linear_jags,
-                       c(params_monitor, "sigma_y"))
+                       c(params_monitor, "tau"))
 check_convergence(fit_woba, "wOBA")
 report_label(fit_woba, "wOBA")
 

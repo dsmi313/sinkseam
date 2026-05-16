@@ -50,7 +50,7 @@ si_ft <- raw |>
   filter(!is.na(pfx_x), !is.na(pfx_z), !is.na(release_speed)) |>
   select(
     game_date, pitcher, batter, pitch_type, stand, p_throws,
-    release_speed, pfx_x, pfx_z,
+    release_speed, pfx_x, pfx_z, release_spin_rate,
     # outcome columns used in downstream modelling
     description, events, launch_angle, launch_speed,
     # plate-discipline helpers
