@@ -10,17 +10,14 @@
 # Alignment is measured with the adjusted Rand index (ARI).  An ARI near 0
 # means the label boundaries do not correspond to natural movement clusters.
 #
-# Set INCLUDE_SPIN_AXIS = TRUE to add spin axis as a 4th clustering feature.
-
 library(dplyr)
 library(mclust)
 
-INCLUDE_SPIN_AXIS <- FALSE
-
 clean <- readRDS("data/clean/cu_sl_st_clean.rds")
 
-feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z")
-if (INCLUDE_SPIN_AXIS) feature_cols <- c(feature_cols, "spin_axis_z")
+# spin_axis_z included by default: spin axis (~180° for CU, ~90° for SL/ST) is
+# the mechanistically primary separator for breaking ball types.
+feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z", "spin_axis_z")
 
 features <- clean |>
   select(all_of(feature_cols)) |>
@@ -76,8 +73,7 @@ gmm_results <- list(
   purity_g3         = purity_g3,
   tab_g2            = tab_g2,
   tab_g3            = tab_g3,
-  feature_cols      = feature_cols,
-  include_spin_axis = INCLUDE_SPIN_AXIS
+  feature_cols = feature_cols
 )
 
 saveRDS(gmm_results, "data/clean/gmm_results.rds")

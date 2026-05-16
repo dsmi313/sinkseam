@@ -79,8 +79,11 @@ clean <- raw |>
     label_sl = as.integer(pitch_type == "SL"),
     label_st = as.integer(pitch_type == "ST"),
 
-    # Batter handedness: RHB = 1, LHB = 0 (left-handed batter is reference).
-    batter_right = as.integer(stand == "R"),
+    # Same-handedness matchup: 1 when pitcher and batter share throwing/batting hand.
+    # Sweepers and sliders behave very differently against same- vs. opposite-hand batters.
+    same_hand = as.integer(
+      (p_throws == "R" & stand == "R") | (p_throws == "L" & stand == "L")
+    ),
 
     # Two-strike indicator for count context.
     two_strike = as.integer(strikes == 2),
@@ -94,14 +97,14 @@ clean <- raw |>
     spin_axis_z = scale(release_spin_axis)[, 1]
   ) |>
   select(
-    game_date, pitcher, pitcher_id, batter, pitch_type,
+    game_date, game_year, pitcher, pitcher_id, batter, pitch_type,
     label_sl, label_st,
-    p_throws, stand, batter_right,
-    balls, strikes, two_strike,
+    p_throws, stand, same_hand,
+    balls, strikes, two_strike, outs_when_up, inning,
     release_speed, release_spin_rate, release_spin_axis,
-    pfx_x, pfx_z, pfx_x_adj,
+    pfx_x, pfx_z, pfx_x_adj, plate_x, plate_z,
     pfx_x_z, pfx_z_z, speed_z, spin_axis_z,
-    description, events, zone,
+    description, events, type, zone,
     whiff, chase, woba
   )
 
