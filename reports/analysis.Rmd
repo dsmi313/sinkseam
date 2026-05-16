@@ -46,7 +46,6 @@ breaking <- read_csv("data/raw/statcast_breaking.csv")
 
 ```{r pitch-counts-table}
 count_table <- breaking |>
-  filter(pitch_type %in% c("CU", "SL", "ST")) |>
   dplyr::count(game_year, pitch_type) |>
   tidyr::pivot_wider(names_from = pitch_type, values_from = n, values_fill = 0)
 
