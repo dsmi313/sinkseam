@@ -1,5 +1,5 @@
 # 01_data_pull.R
-# Pull CU, SL, and ST pitches from Baseball Savant for 2022-2025.
+# Pull CU, SL, and ST pitches from Baseball Savant for 2023-2025.
 # Saves to data/raw/statcast_breaking.csv (read by reports/analysis.Rmd).
 #
 # Uses direct httr calls with a temp-file round-trip to avoid BOM parsing
@@ -9,7 +9,7 @@ library(httr)
 library(readr)
 library(dplyr)
 
-YEARS <- 2022:2025
+YEARS <- 2023:2025
 
 # End-of-month helper (base R only).
 eom <- function(yr, mo) {

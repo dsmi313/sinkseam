@@ -28,7 +28,7 @@ features <- clean |>
 
 message(sprintf("GMM features: %s", paste(feature_cols, collapse = ", ")))
 
-set.seed(42)
+set.seed(2025)
 
 fit_bic <- Mclust(features, G = 2:8, verbose = FALSE)
 message(sprintf(

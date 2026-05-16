@@ -1,8 +1,8 @@
 # 05_jags_model.R
 # Fits three Bayesian hierarchical models via JAGS (using jagsUI):
-#   Model A: whiff ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
-#   Model B: chase ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
-#   Model C: woba  ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
+#   Model A: whiff ~ pfx_x_z + pfx_z_z + speed_z + batter_right + two_strike + label_sl + label_st + (1|pitcher)
+#   Model B: chase ~ pfx_x_z + pfx_z_z + speed_z + batter_right + two_strike + label_sl + label_st + (1|pitcher)
+#   Model C: woba  ~ pfx_x_z + pfx_z_z + speed_z + batter_right + two_strike + label_sl + label_st + (1|pitcher)
 #
 # CU (curveball) is the reference category.  The two key estimands are:
 #   beta_sl: SL vs CU effect (controlling for movement, speed, count, and handedness)
@@ -27,25 +27,24 @@ make_jags_data_binary <- function(df, outcome_col) {
   df_cc <- df |>
     filter(!is.na(.data[[outcome_col]]),
            !is.na(pfx_x_z), !is.na(pfx_z_z), !is.na(speed_z),
-           !is.na(stand_lhb), !is.na(balls_z), !is.na(strikes_z),
+           !is.na(batter_right), !is.na(two_strike),
            !is.na(label_sl), !is.na(label_st), !is.na(pitcher_id))
 
   df_cc <- df_cc |>
     mutate(pitcher_idx = as.integer(factor(pitcher_id)))
 
   list(
-    Y          = df_cc[[outcome_col]],
-    pfx_x_z   = df_cc$pfx_x_z,
-    pfx_z_z   = df_cc$pfx_z_z,
-    speed_z    = df_cc$speed_z,
-    stand_lhb  = df_cc$stand_lhb,
-    balls_z    = df_cc$balls_z,
-    strikes_z  = df_cc$strikes_z,
-    label_sl   = df_cc$label_sl,
-    label_st   = df_cc$label_st,
-    pitcher_id = df_cc$pitcher_idx,
-    N          = nrow(df_cc),
-    J          = max(df_cc$pitcher_idx)
+    Y            = df_cc[[outcome_col]],
+    pfx_x_z      = df_cc$pfx_x_z,
+    pfx_z_z      = df_cc$pfx_z_z,
+    speed_z      = df_cc$speed_z,
+    batter_right = df_cc$batter_right,
+    two_strike   = df_cc$two_strike,
+    label_sl     = df_cc$label_sl,
+    label_st     = df_cc$label_st,
+    pitcher_id   = df_cc$pitcher_idx,
+    N            = nrow(df_cc),
+    J            = max(df_cc$pitcher_idx)
   )
 }
 
@@ -53,31 +52,30 @@ make_jags_data_continuous <- function(df) {
   df_cc <- df |>
     filter(!is.na(woba),
            !is.na(pfx_x_z), !is.na(pfx_z_z), !is.na(speed_z),
-           !is.na(stand_lhb), !is.na(balls_z), !is.na(strikes_z),
+           !is.na(batter_right), !is.na(two_strike),
            !is.na(label_sl), !is.na(label_st), !is.na(pitcher_id))
 
   df_cc <- df_cc |>
     mutate(pitcher_idx = as.integer(factor(pitcher_id)))
 
   list(
-    Y          = df_cc$woba,
-    pfx_x_z   = df_cc$pfx_x_z,
-    pfx_z_z   = df_cc$pfx_z_z,
-    speed_z    = df_cc$speed_z,
-    stand_lhb  = df_cc$stand_lhb,
-    balls_z    = df_cc$balls_z,
-    strikes_z  = df_cc$strikes_z,
-    label_sl   = df_cc$label_sl,
-    label_st   = df_cc$label_st,
-    pitcher_id = df_cc$pitcher_idx,
-    N          = nrow(df_cc),
-    J          = max(df_cc$pitcher_idx)
+    Y            = df_cc$woba,
+    pfx_x_z      = df_cc$pfx_x_z,
+    pfx_z_z      = df_cc$pfx_z_z,
+    speed_z      = df_cc$speed_z,
+    batter_right = df_cc$batter_right,
+    two_strike   = df_cc$two_strike,
+    label_sl     = df_cc$label_sl,
+    label_st     = df_cc$label_st,
+    pitcher_id   = df_cc$pitcher_idx,
+    N            = nrow(df_cc),
+    J            = max(df_cc$pitcher_idx)
   )
 }
 
 params_monitor <- c(
   "beta_pfx_x", "beta_pfx_z", "beta_speed",
-  "beta_stand", "beta_balls", "beta_strikes",
+  "beta_R", "beta_2strike",
   "beta_sl", "beta_st", "beta_st_vs_sl",
   "mu_alpha", "tau_alpha"
 )
@@ -86,9 +84,8 @@ inits_fn <- function() list(
   beta_pfx_x  = rnorm(1, 0, 0.1),
   beta_pfx_z  = rnorm(1, 0, 0.1),
   beta_speed  = rnorm(1, 0, 0.1),
-  beta_stand  = rnorm(1, 0, 0.1),
-  beta_balls  = rnorm(1, 0, 0.1),
-  beta_strikes = rnorm(1, 0, 0.1),
+  beta_R      = rnorm(1, 0, 0.1),
+  beta_2strike = rnorm(1, 0, 0.1),
   beta_sl     = rnorm(1, 0, 0.1),
   beta_st     = rnorm(1, 0, 0.1),
   mu_alpha    = rnorm(1, 0, 0.1),

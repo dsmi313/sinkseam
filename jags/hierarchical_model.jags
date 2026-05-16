@@ -5,7 +5,8 @@
 # Reference category: CU (curveball).  label_sl and label_st are binary
 # indicators passed from R; when both are 0 the pitch is a curveball.
 #
-# Confounders: stand_lhb (1=LHB, 0=RHB), balls_z, strikes_z (standardized count).
+# Confounders: batter_right (1=RHB, 0=LHB; left-handed batter is reference),
+#              two_strike (1 if strike count = 2, 0 otherwise).
 #
 # Key estimands:
 #   beta_sl        – SL vs CU effect on log-odds (controlling for movement, speed, count, handedness)
@@ -18,14 +19,13 @@
 model {
   for (i in 1:N) {
     logit(p[i]) <- alpha[pitcher_id[i]] +
-                   beta_pfx_x   * pfx_x_z[i]  +
-                   beta_pfx_z   * pfx_z_z[i]  +
-                   beta_speed   * speed_z[i]   +
-                   beta_stand   * stand_lhb[i] +
-                   beta_balls   * balls_z[i]   +
-                   beta_strikes * strikes_z[i] +
-                   beta_sl      * label_sl[i]  +
-                   beta_st      * label_st[i]
+                   beta_pfx_x  * pfx_x_z[i]      +
+                   beta_pfx_z  * pfx_z_z[i]      +
+                   beta_speed  * speed_z[i]       +
+                   beta_R      * batter_right[i]  +
+                   beta_2strike * two_strike[i]   +
+                   beta_sl     * label_sl[i]      +
+                   beta_st     * label_st[i]
 
     Y[i] ~ dbern(p[i])
   }
@@ -43,9 +43,8 @@ model {
   beta_pfx_x   ~ dnorm(0, 1)
   beta_pfx_z   ~ dnorm(0, 1)
   beta_speed   ~ dnorm(0, 1)
-  beta_stand   ~ dnorm(0, 1)
-  beta_balls   ~ dnorm(0, 1)
-  beta_strikes ~ dnorm(0, 1)
+  beta_R       ~ dnorm(0, 1)
+  beta_2strike ~ dnorm(0, 1)
   beta_sl      ~ dnorm(0, 1)
   beta_st      ~ dnorm(0, 1)
 }

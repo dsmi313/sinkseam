@@ -79,8 +79,11 @@ clean <- raw |>
     label_sl = as.integer(pitch_type == "SL"),
     label_st = as.integer(pitch_type == "ST"),
 
-    # Batter handedness: 1 = LHB, 0 = RHB.
-    stand_lhb  = as.integer(stand == "L"),
+    # Batter handedness: RHB = 1, LHB = 0 (left-handed batter is reference).
+    batter_right = as.integer(stand == "R"),
+
+    # Two-strike indicator for count context.
+    two_strike = as.integer(strikes == 2),
 
     pitcher_id = as.integer(factor(pitcher))
   ) |>
@@ -88,15 +91,13 @@ clean <- raw |>
     pfx_x_z     = scale(pfx_x_adj)[, 1],
     pfx_z_z     = scale(pfx_z)[, 1],
     speed_z     = scale(release_speed)[, 1],
-    spin_axis_z = scale(release_spin_axis)[, 1],
-    balls_z     = scale(balls)[, 1],
-    strikes_z   = scale(strikes)[, 1]
+    spin_axis_z = scale(release_spin_axis)[, 1]
   ) |>
   select(
     game_date, pitcher, pitcher_id, batter, pitch_type,
     label_sl, label_st,
-    p_throws, stand, stand_lhb,
-    balls, strikes, balls_z, strikes_z,
+    p_throws, stand, batter_right,
+    balls, strikes, two_strike,
     release_speed, release_spin_rate, release_spin_axis,
     pfx_x, pfx_z, pfx_x_adj,
     pfx_x_z, pfx_z_z, speed_z, spin_axis_z,

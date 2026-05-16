@@ -37,7 +37,7 @@ message(sprintf(
   nrow(features), paste(feature_cols, collapse = ", ")
 ))
 
-# Features are already standardized (mean=0, SD=1), so no rescaling needed.
+set.seed(2025)
 pca <- prcomp(features, center = FALSE, scale. = FALSE)
 
 var_exp <- summary(pca)$importance["Proportion of Variance", ]
