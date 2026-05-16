@@ -42,14 +42,10 @@ breaking <- read_csv("C:/Users/fishd/OneDrive/Manuscripts/Statcast/WD/statcast_b
 
 ```{r pitch-counts-table}
 count_table <- breaking |>
-  filter(pitch_type %in% c("CU", "SL", "ST")) |>
-  dplyr::count(game_year, pitch_type) |>
+  count(game_year, pitch_type) |>
   tidyr::pivot_wider(names_from = pitch_type, values_from = n, values_fill = 0)
 
-kable(count_table,
-      col.names = c("Season", "CU", "SL", "ST"),
-      caption   = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper).",
-      format.args = list(big.mark = ","))
+knitr::kable(count_table, caption = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper)")
 ```
 
 ```{r data-prep}
