@@ -1,14 +1,14 @@
 # hierarchical_model.jags
 # Bayesian hierarchical logistic regression for binary outcomes
-# (ground_ball, whiff).
+# (whiff, chase).
 #
-# Predictors:
-#   pfx_x_z  – arm-side movement, standardized (sign-flipped for LHP)
-#   pfx_z_z  – induced vertical break, standardized
-#   speed_z  – release speed, standardized
-#   label_si – 1 = SI, 0 = FT  (THE KEY ESTIMAND)
+# Reference category: CU (curveball).  label_sl and label_st are binary
+# indicators passed from R; when both are 0 the pitch is a curveball.
 #
-# Random effect: pitcher-level intercept alpha[j], partially pooled.
+# Key estimands:
+#   beta_sl        – SL vs CU effect on log-odds (controlling for movement)
+#   beta_st        – ST vs CU effect on log-odds (controlling for movement)
+#   beta_st_vs_sl  – derived contrast: ST vs SL (= beta_st - beta_sl)
 #
 # Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
 # fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
@@ -18,11 +18,15 @@ model {
     logit(p[i]) <- alpha[pitcher_id[i]] +
                    beta_pfx_x * pfx_x_z[i] +
                    beta_pfx_z * pfx_z_z[i] +
-                   beta_speed * speed_z[i]  +
-                   beta_label * label_si[i]
+                   beta_speed  * speed_z[i]  +
+                   beta_sl    * label_sl[i] +
+                   beta_st    * label_st[i]
 
     Y[i] ~ dbern(p[i])
   }
+
+  # Derived contrast: sweeper vs. slider
+  beta_st_vs_sl <- beta_st - beta_sl
 
   for (j in 1:J) {
     alpha[j] ~ dnorm(mu_alpha, tau_alpha)
@@ -34,5 +38,6 @@ model {
   beta_pfx_x ~ dnorm(0, 0.001)
   beta_pfx_z ~ dnorm(0, 0.001)
   beta_speed ~ dnorm(0, 0.001)
-  beta_label ~ dnorm(0, 0.001)
+  beta_sl    ~ dnorm(0, 0.001)
+  beta_st    ~ dnorm(0, 0.001)
 }

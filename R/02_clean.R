@@ -1,22 +1,26 @@
 # 02_clean.R
-# Cleans raw Statcast SL/ST data and engineers the three outcome variables:
+# Cleans raw Statcast CU/SL/ST data and engineers outcome variables:
 #   whiff  – binary, 1 if swing-and-miss or foul-tip
 #   chase  – binary, 1 if out-of-zone pitch with a swing (NA for in-zone)
-#   woba   – numeric wOBA weight for plate-appearance-ending pitches
+#   woba   – numeric wOBA for plate-appearance-ending pitches
 #
-# Key transformation: flip pfx_x sign for RHP so glove-side break is always
-# positive regardless of handedness.  For sliders/sweepers the relevant
-# movement direction is toward the glove, not the arm — the opposite
-# convention from sinkers/two-seamers.
+# pfx_x sign convention: flip for LHP so that glove-side break is in the same
+# direction for both handednesses.  After adjustment, positive values indicate
+# arm-side movement; breaking balls (CU/SL/ST) have negative pfx_x_adj for
+# both RHP and LHP.
 #
-# Saves: data/clean/sl_st_clean.rds
+# Label encoding: CU is the reference category.
+#   label_sl = 1 if SL, 0 otherwise (CU or ST)
+#   label_st = 1 if ST, 0 otherwise (CU or SL)
+#   Both = 0 → CU (reference)
+#
+# Saves: data/clean/cu_sl_st_clean.rds
 
 library(dplyr)
 
-raw <- readRDS("data/raw/statcast_sl_st.rds")
+raw <- readRDS("data/raw/statcast_cu_sl_st.rds")
 
 # wOBA linear weights (2022-2024 average, source: FanGraphs guts page).
-# Update these weights if the year range changes.
 WOBA_WEIGHTS <- c(
   single       = 0.883,
   double       = 1.263,
@@ -44,7 +48,6 @@ event_to_woba <- function(events) {
   )
 }
 
-# Descriptions that constitute a swing.
 SWING_DESCRIPTIONS <- c(
   "swinging_strike", "swinging_strike_blocked", "foul_tip",
   "foul", "foul_bunt", "missed_bunt",
@@ -53,43 +56,40 @@ SWING_DESCRIPTIONS <- c(
 
 clean <- raw |>
   mutate(
-    # Glove-side movement convention: positive = glove side for both hands.
-    # For sliders/sweepers the horizontal break is toward the glove, so we
-    # flip RHP (whose sliders have negative pfx_x in Statcast) to positive.
-    pfx_x_adj = if_else(p_throws == "R", -pfx_x, pfx_x),
+    # Flip pfx_x for LHP so glove-side break is consistently directed.
+    # Result: arm-side = positive, glove-side (breaking balls) = negative.
+    pfx_x_adj = if_else(p_throws == "L", -pfx_x, pfx_x),
 
-    # Outcome 1: whiff (swing and miss on this pitch).
+    # Outcome 1: whiff.
     whiff = as.integer(description %in% c("swinging_strike",
                                           "swinging_strike_blocked",
                                           "foul_tip")),
 
-    # Outcome 2: chase (swing at out-of-zone pitch).
-    # Statcast zones 11-14 are outside the strike zone.
-    # NA for in-zone pitches — the JAGS model filters to non-NA rows.
+    # Outcome 2: chase (swing on out-of-zone pitch; NA for in-zone pitches).
     chase = case_when(
       zone %in% 11:14 & description %in% SWING_DESCRIPTIONS ~ 1L,
       zone %in% 11:14 ~ 0L,
       TRUE ~ NA_integer_
     ),
 
-    # Outcome 3: wOBA against (defined only for plate-appearance-ending pitches).
+    # Outcome 3: wOBA against.
     woba = event_to_woba(events),
 
-    # Label as integer for JAGS (ST = 1, SL = 0).
+    # Dummy labels — CU is the reference category (both = 0).
+    label_sl = as.integer(pitch_type == "SL"),
     label_st = as.integer(pitch_type == "ST"),
 
-    # Pitcher ID as a consecutive integer index (required by JAGS).
     pitcher_id = as.integer(factor(pitcher))
   ) |>
-  # Standardize movement, speed, and spin axis for GMM and JAGS.
   mutate(
-    pfx_x_z      = scale(pfx_x_adj)[, 1],
-    pfx_z_z      = scale(pfx_z)[, 1],
-    speed_z      = scale(release_speed)[, 1],
-    spin_axis_z  = scale(release_spin_axis)[, 1]
+    pfx_x_z     = scale(pfx_x_adj)[, 1],
+    pfx_z_z     = scale(pfx_z)[, 1],
+    speed_z     = scale(release_speed)[, 1],
+    spin_axis_z = scale(release_spin_axis)[, 1]
   ) |>
   select(
-    game_date, pitcher, pitcher_id, batter, pitch_type, label_st,
+    game_date, pitcher, pitcher_id, batter, pitch_type,
+    label_sl, label_st,
     p_throws, stand,
     release_speed, release_spin_rate, release_spin_axis,
     pfx_x, pfx_z, pfx_x_adj,
@@ -98,8 +98,8 @@ clean <- raw |>
     whiff, chase, woba
   )
 
-saveRDS(clean, "data/clean/sl_st_clean.rds")
+saveRDS(clean, "data/clean/cu_sl_st_clean.rds")
 message(sprintf(
-  "Saved %d pitches (%d pitchers) to data/clean/sl_st_clean.rds",
+  "Saved %d pitches (%d pitchers) to data/clean/cu_sl_st_clean.rds",
   nrow(clean), n_distinct(clean$pitcher)
 ))

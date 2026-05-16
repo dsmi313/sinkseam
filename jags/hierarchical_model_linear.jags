@@ -1,6 +1,14 @@
 # hierarchical_model_linear.jags
 # Bayesian hierarchical linear regression for continuous outcomes (wOBA against).
-# Only plate-appearance-ending pitches are passed in (N < total pitches).
+# Only plate-appearance-ending pitches are passed in.
+#
+# Reference category: CU (curveball).  label_sl and label_st are binary
+# indicators; when both are 0 the pitch is a curveball.
+#
+# Key estimands:
+#   beta_sl        – SL vs CU effect on wOBA
+#   beta_st        – ST vs CU effect on wOBA
+#   beta_st_vs_sl  – derived contrast: ST vs SL
 #
 # Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
 # fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
@@ -12,9 +20,13 @@ model {
     mu[i] <- alpha[pitcher_id[i]] +
               beta_pfx_x * pfx_x_z[i] +
               beta_pfx_z * pfx_z_z[i] +
-              beta_speed * speed_z[i]  +
-              beta_label * label_si[i]
+              beta_speed  * speed_z[i]  +
+              beta_sl    * label_sl[i] +
+              beta_st    * label_st[i]
   }
+
+  # Derived contrast: sweeper vs. slider
+  beta_st_vs_sl <- beta_st - beta_sl
 
   tau ~ dgamma(0.001, 0.001)
 
@@ -28,5 +40,6 @@ model {
   beta_pfx_x ~ dnorm(0, 0.001)
   beta_pfx_z ~ dnorm(0, 0.001)
   beta_speed ~ dnorm(0, 0.001)
-  beta_label ~ dnorm(0, 0.001)
+  beta_sl    ~ dnorm(0, 0.001)
+  beta_st    ~ dnorm(0, 0.001)
 }
