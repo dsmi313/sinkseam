@@ -5,24 +5,29 @@
 # Reference category: CU (curveball).  label_sl and label_st are binary
 # indicators; when both are 0 the pitch is a curveball.
 #
+# Confounders: stand_lhb (1=LHB, 0=RHB), balls_z, strikes_z (standardized count).
+#
 # Key estimands:
-#   beta_sl        – SL vs CU effect on wOBA
-#   beta_st        – ST vs CU effect on wOBA
+#   beta_sl        – SL vs CU effect on wOBA (controlling for movement, speed, count, handedness)
+#   beta_st        – ST vs CU effect on wOBA (controlling for movement, speed, count, handedness)
 #   beta_st_vs_sl  – derived contrast: ST vs SL
 #
-# Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
-# fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
+# Priors: weakly informative N(0, 1) for all fixed effects (Gelman et al. 2008);
+# Gamma(0.001, 0.001) for precision parameters.
 
 model {
   for (i in 1:N) {
     Y[i] ~ dnorm(mu[i], tau)
 
     mu[i] <- alpha[pitcher_id[i]] +
-              beta_pfx_x * pfx_x_z[i] +
-              beta_pfx_z * pfx_z_z[i] +
-              beta_speed  * speed_z[i]  +
-              beta_sl    * label_sl[i] +
-              beta_st    * label_st[i]
+              beta_pfx_x   * pfx_x_z[i]  +
+              beta_pfx_z   * pfx_z_z[i]  +
+              beta_speed   * speed_z[i]   +
+              beta_stand   * stand_lhb[i] +
+              beta_balls   * balls_z[i]   +
+              beta_strikes * strikes_z[i] +
+              beta_sl      * label_sl[i]  +
+              beta_st      * label_st[i]
   }
 
   # Derived contrast: sweeper vs. slider
@@ -37,9 +42,12 @@ model {
   mu_alpha  ~ dnorm(0, 0.001)
   tau_alpha ~ dgamma(0.001, 0.001)
 
-  beta_pfx_x ~ dnorm(0, 0.001)
-  beta_pfx_z ~ dnorm(0, 0.001)
-  beta_speed ~ dnorm(0, 0.001)
-  beta_sl    ~ dnorm(0, 0.001)
-  beta_st    ~ dnorm(0, 0.001)
+  beta_pfx_x   ~ dnorm(0, 1)
+  beta_pfx_z   ~ dnorm(0, 1)
+  beta_speed   ~ dnorm(0, 1)
+  beta_stand   ~ dnorm(0, 1)
+  beta_balls   ~ dnorm(0, 1)
+  beta_strikes ~ dnorm(0, 1)
+  beta_sl      ~ dnorm(0, 1)
+  beta_st      ~ dnorm(0, 1)
 }

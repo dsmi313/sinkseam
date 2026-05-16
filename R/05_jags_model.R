@@ -1,13 +1,19 @@
 # 05_jags_model.R
 # Fits three Bayesian hierarchical models via JAGS (using jagsUI):
-#   Model A: whiff ~ pfx_x_z + pfx_z_z + speed_z + label_sl + label_st + (1|pitcher)
-#   Model B: chase ~ pfx_x_z + pfx_z_z + speed_z + label_sl + label_st + (1|pitcher)
-#   Model C: woba  ~ pfx_x_z + pfx_z_z + speed_z + label_sl + label_st + (1|pitcher)
+#   Model A: whiff ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
+#   Model B: chase ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
+#   Model C: woba  ~ pfx_x_z + pfx_z_z + speed_z + stand_lhb + balls_z + strikes_z + label_sl + label_st + (1|pitcher)
 #
 # CU (curveball) is the reference category.  The two key estimands are:
-#   beta_sl: SL vs CU effect (controlling for movement and speed)
-#   beta_st: ST vs CU effect (controlling for movement and speed)
+#   beta_sl: SL vs CU effect (controlling for movement, speed, count, and handedness)
+#   beta_st: ST vs CU effect (controlling for movement, speed, count, and handedness)
 # A derived contrast beta_st_vs_sl = beta_st - beta_sl is computed inside JAGS.
+#
+# NOTE: conditioning on pfx_x_z, pfx_z_z, and speed_z makes this a conservative
+# test — movement and velocity partly mediate the label-to-outcome path.  A
+# positive result (label CIs exclude zero) is therefore strong evidence that the
+# taxonomy captures something beyond the physics.  A null result is weaker because
+# we may have conditioned away signal, not because labels are uninformative.
 #
 # If all three credible intervals include zero, the three-label taxonomy adds no
 # predictive value beyond movement — the classification is unsupported.
@@ -21,6 +27,7 @@ make_jags_data_binary <- function(df, outcome_col) {
   df_cc <- df |>
     filter(!is.na(.data[[outcome_col]]),
            !is.na(pfx_x_z), !is.na(pfx_z_z), !is.na(speed_z),
+           !is.na(stand_lhb), !is.na(balls_z), !is.na(strikes_z),
            !is.na(label_sl), !is.na(label_st), !is.na(pitcher_id))
 
   df_cc <- df_cc |>
@@ -30,12 +37,15 @@ make_jags_data_binary <- function(df, outcome_col) {
     Y          = df_cc[[outcome_col]],
     pfx_x_z   = df_cc$pfx_x_z,
     pfx_z_z   = df_cc$pfx_z_z,
-    speed_z   = df_cc$speed_z,
-    label_sl  = df_cc$label_sl,
-    label_st  = df_cc$label_st,
+    speed_z    = df_cc$speed_z,
+    stand_lhb  = df_cc$stand_lhb,
+    balls_z    = df_cc$balls_z,
+    strikes_z  = df_cc$strikes_z,
+    label_sl   = df_cc$label_sl,
+    label_st   = df_cc$label_st,
     pitcher_id = df_cc$pitcher_idx,
-    N         = nrow(df_cc),
-    J         = max(df_cc$pitcher_idx)
+    N          = nrow(df_cc),
+    J          = max(df_cc$pitcher_idx)
   )
 }
 
@@ -43,6 +53,7 @@ make_jags_data_continuous <- function(df) {
   df_cc <- df |>
     filter(!is.na(woba),
            !is.na(pfx_x_z), !is.na(pfx_z_z), !is.na(speed_z),
+           !is.na(stand_lhb), !is.na(balls_z), !is.na(strikes_z),
            !is.na(label_sl), !is.na(label_st), !is.na(pitcher_id))
 
   df_cc <- df_cc |>
@@ -52,29 +63,36 @@ make_jags_data_continuous <- function(df) {
     Y          = df_cc$woba,
     pfx_x_z   = df_cc$pfx_x_z,
     pfx_z_z   = df_cc$pfx_z_z,
-    speed_z   = df_cc$speed_z,
-    label_sl  = df_cc$label_sl,
-    label_st  = df_cc$label_st,
+    speed_z    = df_cc$speed_z,
+    stand_lhb  = df_cc$stand_lhb,
+    balls_z    = df_cc$balls_z,
+    strikes_z  = df_cc$strikes_z,
+    label_sl   = df_cc$label_sl,
+    label_st   = df_cc$label_st,
     pitcher_id = df_cc$pitcher_idx,
-    N         = nrow(df_cc),
-    J         = max(df_cc$pitcher_idx)
+    N          = nrow(df_cc),
+    J          = max(df_cc$pitcher_idx)
   )
 }
 
 params_monitor <- c(
   "beta_pfx_x", "beta_pfx_z", "beta_speed",
+  "beta_stand", "beta_balls", "beta_strikes",
   "beta_sl", "beta_st", "beta_st_vs_sl",
   "mu_alpha", "tau_alpha"
 )
 
 inits_fn <- function() list(
-  beta_pfx_x = rnorm(1, 0, 0.1),
-  beta_pfx_z = rnorm(1, 0, 0.1),
-  beta_speed = rnorm(1, 0, 0.1),
-  beta_sl    = rnorm(1, 0, 0.1),
-  beta_st    = rnorm(1, 0, 0.1),
-  mu_alpha   = rnorm(1, 0, 0.1),
-  tau_alpha  = rgamma(1, 1, 1)
+  beta_pfx_x  = rnorm(1, 0, 0.1),
+  beta_pfx_z  = rnorm(1, 0, 0.1),
+  beta_speed  = rnorm(1, 0, 0.1),
+  beta_stand  = rnorm(1, 0, 0.1),
+  beta_balls  = rnorm(1, 0, 0.1),
+  beta_strikes = rnorm(1, 0, 0.1),
+  beta_sl     = rnorm(1, 0, 0.1),
+  beta_st     = rnorm(1, 0, 0.1),
+  mu_alpha    = rnorm(1, 0, 0.1),
+  tau_alpha   = rgamma(1, 1, 1)
 )
 
 run_model <- function(jags_data, model_file, params, n_chains = 3,

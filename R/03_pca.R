@@ -18,6 +18,13 @@ INCLUDE_SPIN_AXIS <- FALSE
 
 clean <- readRDS("data/clean/cu_sl_st_clean.rds")
 
+# Feature selection rationale: pfx_x and pfx_z are the theoretically motivated
+# features because they directly capture Magnus-force-induced movement — the
+# physical property that defines breaking-ball identity.  Release angle and
+# extension are delivery mechanics that influence *how* the ball is thrown, not
+# *what* it does in flight; their effect on pitch identity is already integrated
+# into pfx_x/pfx_z.  Including them would add mechanical variation orthogonal
+# to the taxonomy question.
 feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z")
 if (INCLUDE_SPIN_AXIS) feature_cols <- c(feature_cols, "spin_axis_z")
 
