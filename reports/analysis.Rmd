@@ -1,0 +1,243 @@
+---
+title: "Sinker vs. Two-Seam Fastball: Are They Meaningfully Distinct?"
+subtitle: "An Empirical Evaluation of MLB Statcast Classifications, 2020–2023"
+author: "Anonymous (for peer review)"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_document2:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    keep_tex: false
+bibliography: references.bib
+csl: apa.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  out.width = "100%"
+)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+```
+
+```{r load-data}
+clean        <- readRDS(here::here("data/clean/si_ft_clean.rds"))
+gmm_results  <- readRDS(here::here("data/clean/gmm_results.rds"))
+jags_results <- readRDS(here::here("data/clean/jags_results.rds"))
+
+n_pitches  <- nrow(clean)
+n_pitchers <- n_distinct(clean$pitcher)
+n_si       <- sum(clean$pitch_type == "SI")
+n_ft       <- sum(clean$pitch_type == "FT")
+years      <- "2020–2023"
+```
+
+# Introduction
+
+Statcast, Major League Baseball's ball-tracking system, distinguishes two
+closely related fastball variants: the sinker (SI) and the two-seam fastball
+(FT).  Both pitch types are thrown with a two-finger grip that imparts topspin,
+generating downward and arm-side movement.  Despite their mechanical similarity,
+Statcast's automated classification algorithm treats them as separate pitch
+types, and analysts frequently report separate statistics for each.
+
+Whether this distinction is empirically meaningful—that is, whether knowing a
+pitch is labeled SI versus FT tells us anything about outcomes *beyond* what the
+pitch's physical characteristics already reveal—is an open question with
+practical consequences for player evaluation, pitching instruction, and
+predictive modelling.
+
+We address this question with two complementary analyses applied to
+`r format(n_pitches, big.mark = ",")` SI and FT pitches thrown by
+`r n_pitchers` pitchers from `r years`.
+
+1. **Gaussian mixture modelling (GMM)** on pfx_x (arm-side break), pfx_z
+   (vertical break), and release speed tests whether data-driven clusters
+   naturally recover the SI/FT dichotomy.
+2. **Bayesian hierarchical regression** with pitcher-level random intercepts
+   estimates the *incremental* effect of the SI/FT label on three outcomes—
+   ground ball rate, whiff rate, and wOBA against—after conditioning on the
+   same movement features.
+
+# Data
+
+We obtained pitch-level data from Baseball Savant via the `baseballr` R package
+[@baumer2023].  The sample is restricted to pitches classified by Statcast as
+SI or FT thrown during regular-season games from 2020 through 2023
+(SI: `r format(n_si, big.mark = ",")`; FT: `r format(n_ft, big.mark = ",")`).
+
+Arm-side break (pfx_x) was sign-flipped for left-handed pitchers so that
+positive values always indicate movement toward the arm side, following
+standard practice in movement-profile research [@trout2022].
+
+Three outcome variables were constructed:
+
+- **Ground ball** (binary): whether the batted ball resulted in a ground ball,
+  proxied from Statcast event codes.
+- **Whiff** (binary): swing-and-miss or foul-tip on the pitch.
+- **wOBA against** (continuous): linear-weight wOBA for plate-appearance-ending
+  pitches, using `r years` average weights from FanGraphs.
+
+All three movement/speed features were standardized ($\mu = 0$, $\sigma = 1$)
+before modelling.
+
+# Stage 1: Gaussian Mixture Modelling
+
+## Method
+
+We fit GMMs with $G \in \{2, \ldots, 8\}$ components to the three standardized
+features using `mclust` [@scrucca2016], which selects the covariance
+parameterization and $G$ jointly via BIC.  Cluster–label alignment was
+quantified by the adjusted Rand index (ARI; @hubert1985), where ARI = 1
+indicates perfect agreement and ARI ≈ 0 indicates no better than chance.
+
+## Results
+
+```{r gmm-summary}
+g_opt    <- gmm_results$fit_bic$G
+mod_name <- gmm_results$fit_bic$modelName
+ari_g2   <- round(gmm_results$ari_g2, 3)
+ari_bic  <- round(gmm_results$ari_bic, 3)
+purity   <- round(gmm_results$purity, 3)
+```
+
+The BIC-optimal GMM selected $G = `r g_opt`$ components
+(model: `r mod_name`).  This immediately suggests that the data support more
+than two natural clusters, calling into question whether SI and FT map onto
+distinct physical groups.
+
+When we force $G = 2$, the ARI between GMM cluster assignments and the Statcast
+label is `r ari_g2`—well below 0.5 and only marginally above zero
+(Table \@ref(tab:gmm-tab)).  Cluster purity is `r purity`, meaning roughly
+`r round((1 - purity) * 100)`% of pitches are in the minority label within their
+cluster.  The BIC-optimal $G = `r g_opt`$ solution yields an ARI of
+`r ari_bic`.
+
+```{r gmm-tab}
+tab_df <- as.data.frame.matrix(gmm_results$tab_g2)
+kable(
+  tab_df,
+  caption = "Contingency table: GMM clusters (forced G=2) vs. Statcast label",
+  booktabs = TRUE
+) |>
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r fig-f1, fig.cap="Movement profiles for SI (blue) and FT (orange) pitches, 2020–2023. Arm-side break is sign-adjusted for handedness."}
+knitr::include_graphics("figures/F1_movement_scatter.png")
+```
+
+```{r fig-f2, fig.cap="Forced two-component GMM clusters coloured by Statcast label. Substantial mixing within each cluster indicates poor label–cluster alignment."}
+knitr::include_graphics("figures/F2_gmm_vs_label.png")
+```
+
+```{r fig-f3, fig.cap="BIC as a function of the number of GMM components. The dashed red line marks the BIC-optimal solution."}
+knitr::include_graphics("figures/F3_bic_curve.png")
+```
+
+# Stage 2: Bayesian Hierarchical Regression
+
+## Model
+
+For each outcome $Y_{ij}$ (pitch $i$ thrown by pitcher $j$) we fit:
+
+$$
+g(\mathbb{E}[Y_{ij}]) = \alpha_j + \beta_1 \tilde{x}_{ij} + \beta_2 \tilde{z}_{ij} + \beta_3 \tilde{s}_{ij} + \beta_{\text{label}} \cdot \mathbf{1}[\text{SI}]_{ij}
+$$
+
+where $g$ is the logit link for binary outcomes and the identity for wOBA;
+$\tilde{x}$, $\tilde{z}$, $\tilde{s}$ are standardized pfx_x, pfx_z, and
+release speed; and $\alpha_j \sim \mathcal{N}(\mu_\alpha, \sigma_\alpha^2)$ is a
+pitcher random intercept.
+
+Priors are weakly informative: $\beta_k \sim \mathcal{N}(0, 1)$ on the logit
+scale, $\sigma_\alpha \sim \text{Uniform}(0, 5)$.  Models were sampled with
+three chains of 10,000 post-warmup iterations (thinned by 5) in JAGS via
+`jagsUI` [@kellner2021].  Convergence was assessed with the Gelman–Rubin
+statistic $\hat{R} < 1.1$ for all monitored nodes.
+
+## Results
+
+```{r extract-beta-label}
+get_label_summary <- function(fit) {
+  s <- fit$summary["beta_label", c("mean", "sd", "2.5%", "97.5%")]
+  rhat <- fit$Rhat$beta_label
+  c(s, Rhat = rhat)
+}
+
+label_tab <- bind_rows(
+  as.data.frame(t(get_label_summary(jags_results$fit_ground_ball))),
+  as.data.frame(t(get_label_summary(jags_results$fit_whiff))),
+  as.data.frame(t(get_label_summary(jags_results$fit_woba)))
+) |>
+  mutate(
+    Outcome = c("Ground ball rate", "Whiff rate", "wOBA against"),
+    across(where(is.numeric), ~ round(., 3))
+  ) |>
+  select(Outcome, mean, sd, `2.5%`, `97.5%`, Rhat)
+```
+
+```{r beta-label-tab}
+kable(
+  label_tab,
+  col.names = c("Outcome", "Mean", "SD", "2.5%", "97.5%", "$\\hat{R}$"),
+  caption   = "Posterior summaries for $\\beta_{\\text{label}}$ (SI vs. FT effect) across three outcome models. All $\\hat{R} < 1.1$ indicates convergence.",
+  booktabs  = TRUE,
+  escape    = FALSE
+) |>
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r fig-f4, fig.cap="Posterior densities of the SI/FT label effect across three outcome models. The dashed line marks zero. Intervals straddling zero indicate the label adds no predictive information beyond movement."}
+knitr::include_graphics("figures/F4_beta_label_posterior.png")
+```
+
+```{r fig-f5, fig.cap="Caterpillar plot of pitcher random intercepts (ground ball model), showing the top and bottom 20 pitchers by posterior mean. Intervals represent 95% credible intervals."}
+knitr::include_graphics("figures/F5_pitcher_intercepts.png")
+```
+
+# Discussion
+
+The two stages of analysis converge on the same conclusion.  First, GMM reveals
+that SI and FT pitches do not occupy separable regions of movement–speed space:
+the data-driven optimal solution prefers `r g_opt` clusters, and when forced to
+two, the clusters do not align with the Statcast labels (ARI = `r ari_g2`).
+Second, the posterior distributions of $\beta_{\text{label}}$ for all three
+outcomes are centred near zero with 95% credible intervals that include zero,
+indicating that the SI/FT label carries negligible predictive value for ground
+ball rate, whiff rate, or wOBA against once movement and velocity are
+controlled.
+
+These findings have implications for player evaluation and modelling.  Analysts
+who treat SI and FT as distinct pitch types—computing separate strikeout rates,
+ground ball rates, or run values—may be introducing artificial signal that does
+not reflect meaningful physical differences.  Pooling the two types, or relying
+on continuous movement features rather than categorical labels, is likely to
+produce more stable and interpretable summaries.
+
+Several limitations should be noted.  Our ground ball proxy is imperfect because
+we reconstruct batted-ball type from event codes rather than the `bb_type` field
+(which requires a direct CSV download from Baseball Savant).  Grip mechanics and
+pitcher intent are unobserved.  The wOBA weights are fixed at population
+averages and do not account for park or context effects.  Future work could
+extend the analysis to grip-sensor data when available and evaluate additional
+pitch characteristics such as spin rate and axis.
+
+# Conclusion
+
+The SI/FT distinction in Statcast data does not reflect a meaningful bimodal
+partition of physical pitch characteristics, and the label does not improve
+outcome prediction beyond what movement and velocity already capture.  We
+recommend that researchers and practitioners exercise caution when treating the
+two pitch types as distinct categories.
+
+# References
+
+<div id="refs"></div>
