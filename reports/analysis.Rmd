@@ -37,8 +37,8 @@ library(ggrepel)
 ## Data
 
 ```{r data-pull}
-if (!file.exists("data/raw/statcast_breaking.csv")) source("R/01_data_pull.R")
-breaking <- read_csv("data/raw/statcast_breaking.csv")
+if (!file.exists("statcast_breaking.csv")) source("R/01_data_pull.R")
+breaking <- read_csv("statcast_breaking.csv")
 ```
 
 ```{r pitch-counts-table}

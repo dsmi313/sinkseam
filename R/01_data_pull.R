@@ -72,6 +72,5 @@ raw <- bind_rows(Filter(Negate(is.null), raw_list))
 message(sprintf("\nTotal rows pulled: %s", format(nrow(raw), big.mark = ",")))
 print(table(raw$pitch_type, raw$game_year))
 
-dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
-write_csv(raw, "data/raw/statcast_breaking.csv")
-message(sprintf("Saved %s rows to data/raw/statcast_breaking.csv", format(nrow(raw), big.mark = ",")))
+write_csv(raw, "statcast_breaking.csv")
+message(sprintf("Saved %s rows to statcast_breaking.csv", format(nrow(raw), big.mark = ",")))
