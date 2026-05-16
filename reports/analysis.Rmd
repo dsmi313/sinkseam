@@ -37,7 +37,7 @@ library(ggrepel)
 ## Data
 
 Knit this file from the project root directory. If `data/raw/statcast_breaking.rds`
-does not exist, the chunk below pulls CU, SL, and ST pitches for 2022–2024
+does not exist, the chunk below pulls CU, SL, and ST pitches for 2022–2025
 directly from Baseball Savant (no baseballr required). This takes several minutes
 and requires an internet connection.
 
@@ -78,9 +78,9 @@ if (!file.exists(data_path)) {
     )
   }
 
-  # Monthly chunks for the 2022-2024 regular season (April–September).
+  # Monthly chunks for the 2022-2025 regular season (April–September).
   months <- expand.grid(
-    year  = 2022:2024,
+    year  = 2022:2025,
     month = 4:9,
     stringsAsFactors = FALSE
   )
@@ -258,7 +258,7 @@ ggplot(scores_plot, aes(x = PC1, y = PC2)) +
     x      = sprintf("PC1 (%.1f%% variance)", var_exp[1] * 100),
     y      = sprintf("PC2 (%.1f%% variance)", var_exp[2] * 100),
     colour = NULL, fill = NULL,
-    title  = "PCA of breaking-ball movement space (2022–2024)"
+    title  = "PCA of breaking-ball movement space (2022–2025)"
   ) +
   theme_minimal(base_size = 15) +
   theme(legend.position = "bottom") +
