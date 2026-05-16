@@ -19,6 +19,7 @@ knitr::opts_chunk$set(
   cache   = FALSE
 )
 
+
 ```
 
 ```{r libraries}
@@ -37,10 +38,13 @@ library(ggrepel)
 
 
 
+
+
 ## Data
 
 ```{r data-pull}
-breaking <- read_csv("statcast_breaking.csv")
+breaking <- read_csv("C:/Users/fishd/OneDrive/Manuscripts/Statcast/WD/statcast_breaking.csv")
+
 
 ```
 
@@ -57,14 +61,15 @@ kable(count_table,
 
 
 
+
 ```{r data-prep}
 # Columns required downstream.
-REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws", "stand",
-                   "pfx_x", "pfx_z", "release_speed", "release_spin_rate",
-                   "plate_x", "plate_z", "balls", "strikes", "description")
+REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws",
+                   "pfx_x", "pfx_z", "release_speed",
+                   "release_spin_rate", "description")
 
 breaking <- breaking |>
-  filter(pitch_type %in% c("CU", "SL", "ST")) |>
+  dplyr::filter(pitch_type %in% c("CU", "SL", "ST")) |>
   select(any_of(REQUIRED_COLS)) |>
   mutate(
     # Flip pfx_x for LHP so arm-side movement is consistently positive.
@@ -78,27 +83,17 @@ breaking <- breaking |>
     label_sl = as.integer(pitch_type == "SL"),
     label_st = as.integer(pitch_type == "ST"),
 
-    # Same-handedness matchup: sweepers/sliders behave differently vs same-hand batters.
-    same_hand  = as.integer((p_throws == "R" & stand == "R") |
-                              (p_throws == "L" & stand == "L")),
-
-    # Two-strike indicator: count context affects swing decisions.
-    two_strike = as.integer(strikes == 2),
-
     # Consecutive pitcher index for JAGS random effects.
     pitcher_id = as.integer(factor(pitcher))
   ) |>
   # Drop any row missing a feature used in PCA/GMM/JAGS.
-  drop_na(pfx_x_adj, pfx_z, release_speed, release_spin_rate,
-          plate_x, plate_z, same_hand, two_strike) |>
-  # Standardise features for reuse downstream.
+  drop_na(pfx_x_adj, pfx_z, release_speed, release_spin_rate) |>
+  # Standardise the four movement/speed features once for reuse downstream.
   mutate(
     pfx_x_std  = as.numeric(scale(pfx_x_adj)),
     pfx_z_std  = as.numeric(scale(pfx_z)),
     velo_std   = as.numeric(scale(release_speed)),
-    spin_std   = as.numeric(scale(release_spin_rate)),
-    plate_x_std = as.numeric(scale(plate_x)),
-    plate_z_std = as.numeric(scale(plate_z))
+    spin_std   = as.numeric(scale(release_spin_rate))
   )
 
 cat(sprintf(
@@ -109,6 +104,7 @@ cat(sprintf(
   format(sum(breaking$pitch_type == "ST"), big.mark = ","),
   format(n_distinct(breaking$pitcher), big.mark = ",")
 ))
+
 
 ```
 
@@ -151,6 +147,7 @@ cum_var <- rda_smry$cont$importance["Cumulative Proportion",  ]
 
 
 
+
 ```{r pca-variance-table}
 var_tbl <- data.frame(
   PC              = paste0("PC", 1:4),
@@ -159,6 +156,7 @@ var_tbl <- data.frame(
   check.names = FALSE
 )
 kable(var_tbl, caption = "Variance explained by each principal component.")
+
 
 ```
 
@@ -179,16 +177,17 @@ kable(ldg, caption = "PCA species scores / loadings (vegan rda).")
 
 
 
+
 PC1 typically captures the horizontal/vertical break trade-off: curveballs
 load heavily on vertical drop; sweepers load heavily on horizontal break.
 PC2 often separates velocity and spin rate from movement magnitude.
 
-```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Convex hulls mark each label's occupied region. Broadly overlapping occupied regions support the continuum hypothesis; well-separated regions with little overlap would support distinct categories. Note that convex hulls are sensitive to edge points and should be interpreted as approximate boundaries only."}
+```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Convex hulls mark each label's occupied region. An elongated, overlapping cloud supports the continuum hypothesis; non-overlapping hulls support distinct categories."}
 set.seed(1)
 label_colours <- c(CU = "#0072B2", SL = "#D55E00", ST = "#009E73")
 label_names   <- c(CU = "Curveball", SL = "Slider",  ST = "Sweeper")
 
-scores_plot <- all_scores |> slice_sample(n = min(n(), 25000))
+scores_plot <- all_scores |> slice_sample(n = min(nrow(all_scores), 25000))
 
 hull_df <- scores_plot |>
   group_by(pitch_type) |>
@@ -233,6 +232,7 @@ ggplot(scores_plot, aes(x = PC1, y = PC2)) +
     fill   = guide_legend(override.aes = list(alpha = 0.4))
   )
 
+
 ```
 
 ---
@@ -251,6 +251,7 @@ fit_gmm <- Mclust(features_scaled, x = bic_obj, verbose = FALSE)
 cat(sprintf("BIC-optimal: G = %d, model = %s\n",
             fit_gmm$G, fit_gmm$modelName))
 ```
+
 
 
 
@@ -280,6 +281,7 @@ ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
         legend.position  = "right",
         legend.text      = element_text(size = 8))
 
+
 ```
 
 ```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. If clusters align with labels, each cluster region should be dominated by one colour."}
@@ -290,7 +292,7 @@ cluster_df <- data.frame(
   pitch_type = breaking$pitch_type,
   cluster    = factor(fit_gmm$classification)
 ) |>
-  slice_sample(n = min(n(), 25000))
+  slice_sample(n = min(nrow(all_scores), 25000))
 
 ggplot(cluster_df, aes(PC1, PC2)) +
   geom_point(aes(colour = pitch_type, shape = cluster),
@@ -314,6 +316,7 @@ ggplot(cluster_df, aes(PC1, PC2)) +
 
 
 
+
 ```{r gmm-ari}
 ari <- adjustedRandIndex(fit_gmm$classification, breaking$pitch_type)
 cat(sprintf("Adjusted Rand Index (GMM clusters vs. CU/SL/ST labels): %.4f\n", ari))
@@ -323,52 +326,13 @@ tab <- table(Cluster = fit_gmm$classification, Label = breaking$pitch_type)
 kable(tab, caption = sprintf(
   "GMM cluster (G = %d) × Statcast label contingency table.", fit_gmm$G))
 
+
 ```
 
 **ARI interpretation:** ARI near 1 means the clusters closely recover the
 Statcast labels; ARI near 0 means the data-driven boundary has little
 correspondence to the CU/SL/ST taxonomy. An ARI below ~0.2 is consistent with
 a continuum.
-
-```{r gmm-entropy, fig.cap="Distribution of posterior classification entropy by Statcast label. Entropy = 0 means a pitch was assigned to one cluster with certainty; entropy near log(G) means assignment probability was spread evenly across all clusters. High entropy in the tails between pitch types is direct evidence against hard taxonomic boundaries.", fig.height=4}
-# Entropy of soft GMM assignments: H = -sum(p * log(p)) per pitch.
-# High entropy = diffuse assignment = the pitch sits between clusters.
-entropy_vec <- apply(fit_gmm$z, 1, function(p) {
-  p <- p[p > 0]
-  -sum(p * log(p))
-})
-
-entropy_df <- data.frame(
-  entropy    = entropy_vec,
-  pitch_type = breaking$pitch_type
-)
-
-ggplot(entropy_df, aes(entropy, fill = pitch_type, colour = pitch_type)) +
-  geom_histogram(bins = 60, alpha = 0.4, position = "identity") +
-  scale_fill_manual(values = label_colours, labels = label_names) +
-  scale_colour_manual(values = label_colours, labels = label_names) +
-  labs(
-    x      = "Classification entropy",
-    y      = "Count",
-    fill   = NULL, colour = NULL,
-    title  = "GMM posterior classification uncertainty by pitch type"
-  ) +
-  theme_bw() +
-  theme(panel.grid.minor = element_blank(), legend.position = "bottom")
-```
-
-```{r gmm-entropy-summary}
-entropy_summary <- entropy_df |>
-  group_by(pitch_type) |>
-  summarise(
-    `Median entropy` = round(median(entropy), 3),
-    `% high-entropy (> 0.5)` = round(mean(entropy > 0.5) * 100, 1),
-    .groups = "drop"
-  )
-kable(entropy_summary,
-      col.names = c("Label", "Median entropy", "% high-entropy (> 0.5)"),
-      caption   = "Classification entropy by Statcast label. High entropy indicates pitches that sit between GMM clusters — direct evidence of blurred taxonomic boundaries.")
-```
 
 ---
 
@@ -384,19 +348,15 @@ jags_df <- breaking |>
   mutate(pitcher_idx = as.integer(factor(pitcher_id)))
 
 jags_data <- list(
-  Y           = jags_df$whiff,
-  pfx_x_std   = jags_df$pfx_x_std,
-  pfx_z_std   = jags_df$pfx_z_std,
-  velo_std    = jags_df$velo_std,
-  plate_x_std = jags_df$plate_x_std,
-  plate_z_std = jags_df$plate_z_std,
-  same_hand   = jags_df$same_hand,
-  two_strike  = jags_df$two_strike,
-  label_sl    = jags_df$label_sl,
-  label_st    = jags_df$label_st,
-  pitcher_id  = jags_df$pitcher_idx,
-  N           = nrow(jags_df),
-  J           = max(jags_df$pitcher_idx)
+  Y          = jags_df$whiff,
+  pfx_x_std  = jags_df$pfx_x_std,
+  pfx_z_std  = jags_df$pfx_z_std,
+  velo_std   = jags_df$velo_std,
+  label_sl   = jags_df$label_sl,
+  label_st   = jags_df$label_st,
+  pitcher_id = jags_df$pitcher_idx,
+  N          = nrow(jags_df),
+  J          = max(jags_df$pitcher_idx)
 )
 
 cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers\n",
@@ -406,20 +366,17 @@ cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers\n",
 
 
 
+
 ```{r jags-model-string}
 model_string <- "
 model {
   for (i in 1:N) {
     logit(p[i]) <- alpha[pitcher_id[i]] +
-                   beta_pfx_x   * pfx_x_std[i]   +
-                   beta_pfx_z   * pfx_z_std[i]   +
-                   beta_velo    * velo_std[i]     +
-                   beta_plate_x * plate_x_std[i]  +
-                   beta_plate_z * plate_z_std[i]  +
-                   beta_same    * same_hand[i]    +
-                   beta_2strike * two_strike[i]   +
-                   beta_sl      * label_sl[i]     +
-                   beta_st      * label_st[i]
+                   beta_pfx_x * pfx_x_std[i] +
+                   beta_pfx_z * pfx_z_std[i] +
+                   beta_velo  * velo_std[i]   +
+                   beta_sl    * label_sl[i]   +
+                   beta_st    * label_st[i]
     Y[i] ~ dbern(p[i])
   }
 
@@ -432,41 +389,32 @@ model {
   mu_alpha  ~ dnorm(0, 0.001)
   tau_alpha ~ dgamma(0.001, 0.001)
 
-  beta_pfx_x   ~ dnorm(0, 1)
-  beta_pfx_z   ~ dnorm(0, 1)
-  beta_velo    ~ dnorm(0, 1)
-  beta_plate_x ~ dnorm(0, 1)
-  beta_plate_z ~ dnorm(0, 1)
-  beta_same    ~ dnorm(0, 1)
-  beta_2strike ~ dnorm(0, 1)
-  beta_sl      ~ dnorm(0, 1)
-  beta_st      ~ dnorm(0, 1)
+  beta_pfx_x ~ dnorm(0, 0.001)
+  beta_pfx_z ~ dnorm(0, 0.001)
+  beta_velo  ~ dnorm(0, 0.001)
+  beta_sl    ~ dnorm(0, 0.001)
+  beta_st    ~ dnorm(0, 0.001)
 }
 "
 
 model_file <- tempfile(fileext = ".jags")
 writeLines(model_string, model_file)
 
+
 ```
 
 ```{r jags-run, cache=TRUE, results='hide'}
 inits_fn <- function() list(
-  beta_pfx_x   = rnorm(1, 0, 0.1),
-  beta_pfx_z   = rnorm(1, 0, 0.1),
-  beta_velo    = rnorm(1, 0, 0.1),
-  beta_plate_x = rnorm(1, 0, 0.1),
-  beta_plate_z = rnorm(1, 0, 0.1),
-  beta_same    = rnorm(1, 0, 0.1),
-  beta_2strike = rnorm(1, 0, 0.1),
-  beta_sl      = rnorm(1, 0, 0.1),
-  beta_st      = rnorm(1, 0, 0.1),
-  mu_alpha     = rnorm(1, 0, 0.1),
-  tau_alpha    = rgamma(1, 1, 1)
+  beta_pfx_x = rnorm(1, 0, 0.1),
+  beta_pfx_z = rnorm(1, 0, 0.1),
+  beta_velo  = rnorm(1, 0, 0.1),
+  beta_sl    = rnorm(1, 0, 0.1),
+  beta_st    = rnorm(1, 0, 0.1),
+  mu_alpha   = rnorm(1, 0, 0.1),
+  tau_alpha  = rgamma(1, 1, 1)
 )
 
 params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
-            "beta_plate_x", "beta_plate_z",
-            "beta_same", "beta_2strike",
             "beta_sl", "beta_st", "beta_st_vs_sl",
             "mu_alpha", "tau_alpha")
 
@@ -487,6 +435,7 @@ fit_jags <- jags(
 
 
 
+
 ```{r jags-convergence}
 rhat_vals <- unlist(fit_jags$Rhat)
 rhat_vals <- rhat_vals[!is.na(rhat_vals)]
@@ -499,12 +448,11 @@ cat(sprintf(
   if (n_bad == 0) "CONVERGED" else "NOT CONVERGED — interpret with caution"
 ))
 
+
 ```
 
 ```{r jags-posterior-table}
 target_params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
-                   "beta_plate_x", "beta_plate_z",
-                   "beta_same", "beta_2strike",
                    "beta_sl", "beta_st", "beta_st_vs_sl",
                    "mu_alpha", "tau_alpha")
 
@@ -518,10 +466,6 @@ post_tbl <- fit_jags$summary[target_params,
       beta_pfx_x    = "Horiz. break (β_pfx_x)",
       beta_pfx_z    = "Vert. break (β_pfx_z)",
       beta_velo     = "Velocity (β_velo)",
-      beta_plate_x  = "Horiz. location (β_plate_x)",
-      beta_plate_z  = "Vert. location (β_plate_z)",
-      beta_same     = "Same-hand matchup (β_same)",
-      beta_2strike  = "Two-strike count (β_2strike)",
       beta_sl       = "SL vs. CU (β_sl)",
       beta_st       = "ST vs. CU (β_st)",
       beta_st_vs_sl = "ST vs. SL (β_st − β_sl, derived)",
@@ -537,12 +481,13 @@ kable(
   caption   = paste(
     "Posterior summaries for the whiff model.",
     "Key estimands: β_sl (slider vs. curveball) and β_st (sweeper vs. curveball),",
-    "controlling for movement, velocity, pitch location, handedness matchup, and count.",
+    "both controlling for movement and velocity.",
     "Credible intervals that include zero indicate the label adds no predictive",
-    "value beyond these features."
+    "value beyond movement features."
   )
 )
 ```
+
 
 
 
@@ -593,6 +538,7 @@ ggplot(contrast_df, aes(value, fill = contrast, colour = contrast)) +
         legend.position  = "none",
         strip.background = element_blank())
 
+
 ```
 
 ---
@@ -639,6 +585,7 @@ summary_df <- data.frame(
 
 kable(summary_df, caption = "Summary of findings across all three analysis stages.")
 ```
+
 
 
 **Take-home:** Paste this output (or a screenshot) back for interpretation.
