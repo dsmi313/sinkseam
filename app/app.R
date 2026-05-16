@@ -1,5 +1,5 @@
 # app.R
-# Shiny app for exploring SI/FT movement profiles and model results.
+# Shiny app for exploring SL/ST movement profiles and model results.
 # Run with: shiny::runApp("app/")
 #
 # Tabs:
@@ -12,31 +12,30 @@ library(dplyr)
 library(ggplot2)
 library(mclust)
 
-# Data must exist before launching the app.
 stopifnot(
-  file.exists("data/clean/si_ft_clean.rds"),
+  file.exists("data/clean/sl_st_clean.rds"),
   file.exists("data/clean/gmm_results.rds"),
   file.exists("data/clean/jags_results.rds")
 )
 
-clean        <- readRDS("data/clean/si_ft_clean.rds")
+clean        <- readRDS("data/clean/sl_st_clean.rds")
 gmm_results  <- readRDS("data/clean/gmm_results.rds")
 jags_results <- readRDS("data/clean/jags_results.rds")
 
 OUTCOMES <- c(
-  "Ground ball rate" = "fit_ground_ball",
-  "Whiff rate"       = "fit_whiff",
-  "wOBA against"     = "fit_woba"
+  "Whiff rate"   = "fit_whiff",
+  "Chase rate"   = "fit_chase",
+  "wOBA against" = "fit_woba"
 )
 
-LABEL_COLOURS <- c(FT = "#E69F00", SI = "#0072B2")
+LABEL_COLOURS <- c(SL = "#D55E00", ST = "#009E73")
 
 theme_app <- theme_bw(base_size = 13) +
   theme(panel.grid.minor = element_blank(),
-        legend.position = "bottom")
+        legend.position  = "bottom")
 
 ui <- navbarPage(
-  title = "Sinker vs. Two-Seam Fastball",
+  title = "Sweeper vs. Slider",
 
   tabPanel(
     "Movement Explorer",
@@ -59,7 +58,7 @@ ui <- navbarPage(
         numericInput("n_sample", "Points to plot (max)", 20000, min = 1000,
                      max = 50000, step = 1000),
         hr(),
-        helpText("pfx_x is sign-adjusted so positive = arm-side for both hands.")
+        helpText("pfx_x is sign-flipped for RHP so positive = glove-side for both hands.")
       ),
       mainPanel(
         plotOutput("movement_scatter", height = "520px"),
@@ -80,7 +79,8 @@ ui <- navbarPage(
         ),
         hr(),
         verbatimTextOutput("ari_text"),
-        verbatimTextOutput("purity_text")
+        verbatimTextOutput("purity_text"),
+        verbatimTextOutput("spin_axis_note")
       ),
       mainPanel(
         plotOutput("gmm_scatter", height = "460px"),
@@ -99,11 +99,11 @@ ui <- navbarPage(
         selectInput(
           "outcome_sel", "Outcome",
           choices  = OUTCOMES,
-          selected = "fit_ground_ball"
+          selected = "fit_whiff"
         )
       ),
       mainPanel(
-        h4("Posterior summary — beta_label (SI vs. FT effect)"),
+        h4("Posterior summary — beta_label (ST vs. SL effect)"),
         tableOutput("post_summary"),
         plotOutput("post_density", height = "340px"),
         hr(),
@@ -133,9 +133,9 @@ server <- function(input, output, session) {
     ggplot(sampled_data(), aes(pfx_x_adj, pfx_z, colour = pitch_type)) +
       geom_point(alpha = 0.2, size = 0.7) +
       scale_colour_manual(values = LABEL_COLOURS,
-                          labels = c(FT = "Two-seam (FT)", SI = "Sinker (SI)")) +
-      labs(x = "Arm-side break (inches)", y = "Vertical break (inches)",
-           colour = NULL, title = "SI / FT movement profiles") +
+                          labels = c(SL = "Slider (SL)", ST = "Sweeper (ST)")) +
+      labs(x = "Glove-side break (inches)", y = "Vertical break (inches)",
+           colour = NULL, title = "SL / ST movement profiles") +
       theme_app
   })
 
@@ -156,7 +156,7 @@ server <- function(input, output, session) {
     ggplot(df, aes(pfx_x_adj, pfx_z, colour = pitch_type, shape = cluster)) +
       geom_point(alpha = 0.2, size = 0.8) +
       scale_colour_manual(values = LABEL_COLOURS) +
-      labs(x = "Arm-side break (inches)", y = "Vertical break (inches)",
+      labs(x = "Glove-side break (inches)", y = "Vertical break (inches)",
            colour = "Label", shape = "GMM cluster",
            title = "GMM clusters vs. Statcast label") +
       theme_app
@@ -171,6 +171,14 @@ server <- function(input, output, session) {
     sprintf("Cluster purity (G=2): %.3f", gmm_results$purity)
   })
 
+  output$spin_axis_note <- renderText({
+    if (gmm_results$include_spin_axis) {
+      "Spin axis included as 4th GMM feature."
+    } else {
+      "Spin axis excluded from GMM (movement + speed only)."
+    }
+  })
+
   output$contingency_tab <- renderTable({
     as.data.frame.matrix(gmm_results$tab_g2)
   }, rownames = TRUE, striped = TRUE, hover = TRUE)
@@ -180,7 +188,7 @@ server <- function(input, output, session) {
   })
 
   output$post_summary <- renderTable({
-    s <- selected_fit()$summary["beta_label", , drop = FALSE]
+    s    <- selected_fit()$summary["beta_label", , drop = FALSE]
     rhat <- selected_fit()$Rhat$beta_label
     data.frame(
       Parameter = "beta_label",
@@ -196,15 +204,14 @@ server <- function(input, output, session) {
   output$post_density <- renderPlot({
     samps <- do.call(rbind, lapply(selected_fit()$samples, as.data.frame))
     df    <- data.frame(value = samps[["beta_label"]])
-
-    ci <- quantile(df$value, c(0.025, 0.975))
+    ci    <- quantile(df$value, c(0.025, 0.975))
 
     ggplot(df, aes(value)) +
-      geom_density(fill = "#0072B2", alpha = 0.3, colour = "#0072B2") +
+      geom_density(fill = "#009E73", alpha = 0.3, colour = "#009E73") +
       geom_vline(xintercept = 0, linetype = "dashed") +
       geom_vline(xintercept = ci, linetype = "dotted", colour = "red") +
       labs(x = expression(beta["label"]), y = "Density",
-           title = "Posterior distribution of SI/FT label effect",
+           title = "Posterior distribution of SL/ST label effect",
            caption = "Red dotted lines: 95% credible interval") +
       theme_app
   })

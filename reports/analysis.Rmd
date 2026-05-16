@@ -1,6 +1,6 @@
 ---
-title: "Sinker or Two-Seamer? Empirically Evaluating a Contested Pitch Classification"
-subtitle: "Sinker vs. Two-Seam Fastball — sinkseam"
+title: "Sweeper or Slider? Empirically Evaluating a Contested Pitch Classification"
+subtitle: "Slider vs. Sweeper — sinkseam"
 author: "[Your Name]"
 date: "`r Sys.Date()`"
 output:
@@ -28,108 +28,135 @@ library(ggplot2)
 ```
 
 ```{r load-data}
-clean        <- readRDS(here::here("data/clean/si_ft_clean.rds"))
+clean        <- readRDS(here::here("data/clean/sl_st_clean.rds"))
 gmm_results  <- readRDS(here::here("data/clean/gmm_results.rds"))
 jags_results <- readRDS(here::here("data/clean/jags_results.rds"))
 
 n_pitches  <- nrow(clean)
 n_pitchers <- n_distinct(clean$pitcher)
-n_si       <- sum(clean$pitch_type == "SI")
-n_ft       <- sum(clean$pitch_type == "FT")
-years      <- "2020–2023"
+n_sl       <- sum(clean$pitch_type == "SL")
+n_st       <- sum(clean$pitch_type == "ST")
+years      <- "2022–2024"
 ```
 
 # Motivation
 
 Major League Baseball's Statcast system classifies every pitch thrown into one
-of several categories. Two of those categories — the sinker (SI) and the
-two-seam fastball (FT) — have long been treated as distinct pitch types in
-scouting, broadcast, and analytics contexts. Pitchers, coaches, and analysts
-talk about them as if they are different things.
+of several categories. Around 2022–2023, a new label appeared: the sweeper
+(`ST`). Wide-breaking, horizontally-dominant, thrown with a flatter spin axis
+than a traditional slider — the sweeper became the pitch of the moment,
+credited for the dominance of pitchers like Corbin Burnes, Freddy Peralta, and
+a generation of analytically-informed arms.
 
-But are they?
+But the sweeper is not new. Pitchers threw pitches with this movement profile
+for years. They were just called sliders (`SL`).
 
-Both are arm-side-running fastballs. Both generate ground balls through downward
-and horizontal movement. The physical distinction between them — if one exists —
-is subtle enough that MLB's own classification algorithm disagrees with
-pitchers' self-reported pitch types with some regularity, and the sabermetric
-community has debated whether they represent meaningfully different pitches or
-are simply different names for the same movement profile.
+Statcast's introduction of `ST` as a distinct label raises an empirical
+question: does the sweeper/slider distinction reflect a genuine difference in
+pitch characteristics and outcomes, or is it a taxonomic relabeling of a
+continuum that has always existed?  This matters because the label is now baked
+into pitcher evaluation, scouting reports, pitch design conversations, and
+published research.  If sweepers and sliders are not meaningfully distinct,
+analyses that treat them as separate inputs are systematically misspecified.
 
-This paper answers that question empirically using
-`r format(n_pitches, big.mark = ",")` SI and FT pitches thrown by
+This paper addresses that question empirically, using
+`r format(n_pitches, big.mark = ",")` SL and ST pitches thrown by
 `r n_pitchers` pitchers from `r years`.
+
+# Historical Context: A Precedent
+
+This is not the first time MLB's classification system has drawn a contested
+boundary.  The sinker (SI) and two-seam fastball (FT) were treated as distinct
+pitch types from the introduction of Statcast through approximately 2020, at
+which point MLB quietly deprecated `FT` and absorbed two-seamers into the `SI`
+category. The sabermetric community had long argued the two were geometrically
+inseparable [@dvorocsik2019].  The reclassification validated that view.
+
+The sweeper/slider situation is the current version of this problem, with one
+key difference: the boundary is being drawn more finely rather than collapsed.
+We are asking whether a split that did not exist in the data three years ago
+is real.
 
 # Research Question
 
-**Does the SI/FT pitch label predict outcomes above and beyond the movement
+**Does the SL/ST pitch label predict outcomes above and beyond the movement
 features themselves?**
 
 We decompose this into two sub-questions:
 
 1. **Geometric:** Do data-driven clusters of pitch movement profiles align with
-   the SI/FT label? If not, the label is empirically unsupported as a
+   the SL/ST label? If not, the label is empirically unsupported as a
    classification boundary.
-
 2. **Predictive:** After conditioning on movement features (horizontal break,
    induced vertical break, velocity), does knowing whether a pitch is labeled
-   SI vs. FT tell us anything additional about outcomes (ground ball rate,
-   whiff rate, wOBA against)?
+   SL vs. ST tell us anything additional about outcomes (whiff rate, wOBA
+   against, chase rate)?
 
-If the answer to both is no, the SI/FT distinction is a taxonomic artifact
-rather than a meaningful baseball fact.
+If the answer to both is no, the sweeper/slider distinction is a taxonomic
+artifact rather than a meaningful baseball fact.  If yes, the new label is
+justified and analysts should treat the types separately.
 
 # Data
 
-Data come from MLB Statcast via Baseball Savant, pulled using the `baseballr`
-R package [@baumer2023]. We retain all pitches classified as either SI or FT
-across regular-season games from `r years`
-(SI: `r format(n_si, big.mark = ",")`; FT: `r format(n_ft, big.mark = ",")`).
+Data come from MLB Statcast via Baseball Savant, pulled using the `baseballr` R
+package [@baumer2023].  We retain all pitches classified as either SL (slider)
+or ST (sweeper) across regular-season games from `r years`
+(SL: `r format(n_sl, big.mark = ",")`; ST: `r format(n_st, big.mark = ",")`).
+The analysis begins in 2022 because the `ST` label did not exist before then.
 
 **Variables retained:**
 
 | Variable | Description |
 |---|---|
-| `pitch_type` | SI or FT (the label under scrutiny) |
+| `pitch_type` | SL or ST (the label under scrutiny) |
 | `pfx_x` | Horizontal movement (inches, relative to gyroball) |
 | `pfx_z` | Induced vertical break (inches) |
 | `release_speed` | Velocity at release (mph) |
 | `release_spin_rate` | Spin rate (rpm) |
+| `release_spin_axis` | Spin axis (degrees) |
 | `p_throws` | Pitcher handedness (L/R) |
 | `pitcher` | Pitcher ID (for random effects) |
-| `events`, `description` | For outcome construction |
+| `description`, `events`, `zone` | For outcome construction |
 
-**Key preprocessing decision:** `pfx_x` is sign-flipped for left-handed
-pitchers so that arm-side movement is always positive, regardless of
-handedness [@trout2022]. All three movement/speed features are standardized
-($\mu = 0$, $\sigma = 1$) before modelling.
+**Key preprocessing decision:** `pfx_x` is sign-flipped for right-handed
+pitchers so that glove-side break is always positive regardless of
+handedness — the relevant movement direction for sliders and sweepers.  All
+three movement/speed features are standardized ($\mu = 0$, $\sigma = 1$) before
+modelling.  Spin axis is standardized and retained as an optional fourth GMM
+clustering feature (see Section \@ref(stage-1-gaussian-mixture-modelling)).
 
 Three outcome variables were constructed:
 
-- **Ground ball** (binary): ground-ball batted-ball result, proxied from
-  Statcast event codes (see limitations).
 - **Whiff** (binary): swing-and-miss or foul-tip on the pitch.
+- **Chase** (binary): swing at an out-of-zone pitch (Statcast zones 11–14);
+  NA for in-zone pitches.
 - **wOBA against** (continuous): linear-weight wOBA for plate-appearance-ending
   pitches, using `r years` average weights from FanGraphs.
 
-# Stage 1: Gaussian Mixture Modelling
+# Stage 1: Gaussian Mixture Modelling {#stage-1-gaussian-mixture-modelling}
 
 ## Method
 
-We cluster all SI/FT pitches in the space of `pfx_x` (standardized by
-handedness), `pfx_z`, and `release_speed` using Gaussian Mixture Models (GMM)
-via the `mclust` package [@scrucca2016]. GMM is preferable to $k$-means here
-because it is model-based — the number of components $G$ and covariance
-structure are selected jointly by BIC — and it assigns soft cluster memberships
-rather than hard assignments.
+We cluster all SL/ST pitches in the space of `pfx_x` (glove-side, sign-adjusted),
+`pfx_z`, and `release_speed` — all standardized — using Gaussian Mixture Models
+(GMM) via the `mclust` package [@scrucca2016].  GMM is preferable to $k$-means
+because it is model-based (the number of components $G$ and covariance structure
+are selected jointly by BIC) and provides soft cluster membership probabilities.
 
 Cluster–label alignment is quantified by the Adjusted Rand Index (ARI;
-@hubert1985). ARI $= 1$ indicates perfect agreement; ARI $\approx 0$ is no
-better than chance.
+@hubert1985).  ARI $= 1$ indicates perfect agreement; ARI $\approx 0$ is no
+better than chance.  A forced-$G = 2$ solution is also reported to directly
+test the two-cluster hypothesis implied by the SL/ST dichotomy.
 
-Based on @dvorocsik2019, who found substantial within-type heterogeneity even
-within established pitch classifications, we expect meaningful overlap between
-SI and FT in movement space and thus a low ARI.
+```{r gmm-flag}
+spin_note <- if (gmm_results$include_spin_axis) {
+  "Spin axis (standardized) was included as a fourth clustering dimension."
+} else {
+  "Spin axis was excluded from the primary GMM (movement and speed only); inclusion is reported as a sensitivity check."
+}
+```
+
+`r spin_note`
 
 ## Results
 
@@ -142,31 +169,29 @@ purity   <- round(gmm_results$purity, 3)
 ```
 
 The BIC-optimal GMM selected $G = `r g_opt`$ components
-(model: `r mod_name`). This immediately suggests that the data support more
-than two natural clusters, calling into question whether SI and FT map onto
-distinct physical groups.
+(model: `r mod_name`), suggesting the data support
+`r if(g_opt == 2) "exactly two" else sprintf("more than two (%d)", g_opt)`
+natural clusters in movement–speed space.
 
-When we force $G = 2$, the ARI between GMM cluster assignments and the Statcast
-label is `r ari_g2` — well below 0.5 and only marginally above chance
-(Table \@ref(tab:gmm-tab)). Cluster purity is `r purity`, meaning roughly
-`r round((1 - purity) * 100)`% of pitches are in the minority label within their
-cluster. The BIC-optimal $G = `r g_opt`$ solution yields an ARI of `r ari_bic`.
+When forced to $G = 2$, the ARI between cluster assignments and the Statcast
+label is `r ari_g2` (Table \@ref(tab:gmm-tab)).  Cluster purity is `r purity`.
+The BIC-optimal solution yields ARI = `r ari_bic`.
 
 ```{r gmm-tab}
 tab_df <- as.data.frame.matrix(gmm_results$tab_g2)
 kable(
   tab_df,
-  caption = "Contingency table: GMM clusters (forced G=2) vs. Statcast label",
+  caption = "Contingency table: GMM clusters (forced G=2) vs. Statcast label.",
   booktabs = TRUE
 ) |>
   kable_styling(latex_options = "hold_position")
 ```
 
-```{r fig-f1, fig.cap="Movement profiles for SI (blue) and FT (orange) pitches. Arm-side break is sign-adjusted for handedness."}
+```{r fig-f1, fig.cap="Movement profiles for SL (orange) and ST (green) pitches, 2022--2024. Glove-side break is sign-adjusted for handedness."}
 knitr::include_graphics("figures/F1_movement_scatter.png")
 ```
 
-```{r fig-f2, fig.cap="Forced two-component GMM clusters coloured by Statcast label. Substantial mixing within each cluster indicates poor label--cluster alignment."}
+```{r fig-f2, fig.cap="Forced two-component GMM clusters coloured by Statcast label. Heavy mixing within clusters would indicate the SL/ST boundary does not correspond to a natural movement discontinuity."}
 knitr::include_graphics("figures/F2_gmm_vs_label.png")
 ```
 
@@ -180,15 +205,16 @@ knitr::include_graphics("figures/F3_bic_curve.png")
 
 For each outcome $y_i$ (pitch $i$ thrown by pitcher $j[i]$) we fit:
 
-$$y_i \sim \mathcal{N}(\mu_i,\, \tau^{-1})$$
+$$y_i \sim \mathcal{N}(\mu_i,\; \tau^{-1})$$
 
-$$\mu_i = \alpha_{j[i]} + \beta_x \tilde{x}_i + \beta_z \tilde{z}_i + \beta_v \tilde{v}_i + \beta_{\text{label}} \cdot \mathbf{1}[\text{SI}]_i$$
+$$\mu_i = \alpha_{j[i]} + \beta_x \tilde{x}_i + \beta_z \tilde{z}_i + \beta_v \tilde{v}_i + \beta_{\text{label}} \cdot \mathbf{1}[\text{ST}]_i$$
 
-$$\alpha_j \sim \mathcal{N}(\mu_\alpha,\, \tau_\alpha^{-1})$$
+$$\alpha_j \sim \mathcal{N}(\mu_\alpha,\; \tau_\alpha^{-1})$$
 
-where $\tilde{x}$, $\tilde{z}$, $\tilde{v}$ are standardized pfx\_x, pfx\_z,
-and release speed; and $\alpha_j$ is a pitcher random intercept.  A logit link
-replaces the identity link for the two binary outcomes (ground ball, whiff).
+where $\tilde{x}$, $\tilde{z}$, $\tilde{v}$ are standardized pfx\_x (glove-side
+adjusted), pfx\_z, and release speed; and $\alpha_j$ is a pitcher random
+intercept allowing for the fact that some pitchers throw both pitch types.  A
+logit link replaces the identity link for the two binary outcomes (whiff, chase).
 
 ## Priors
 
@@ -199,19 +225,19 @@ $$\mu_\alpha \sim \mathcal{N}(0,\; 0.001^{-1})$$
 $$\tau_\alpha \sim \text{Gamma}(0.001,\; 0.001)$$
 $$\tau \sim \text{Gamma}(0.001,\; 0.001)$$
 
-Note: these precisions (JAGS parameterization) correspond to very diffuse
-normal distributions ($\text{SD} \approx 31.6$) and nearly flat Gamma shapes.
-Prior sensitivity to these choices is a subject for future work.
+Precision values are in JAGS parameterization (SD $\approx 31.6$ for the normal
+priors).  Prior sensitivity is an acknowledged open question.
 
 ## Inference
 
-We run 3 chains in JAGS via `jagsUI` [@kellner2021], discarding 5,000
-burn-in iterations and thinning by 5. Convergence is assessed via the
-Gelman–Rubin diagnostic ($\hat{R} < 1.1$ for all parameters).
+We run 3 chains in JAGS via `jagsUI` [@kellner2021], discarding 5,000 burn-in
+iterations and thinning by 5.  Convergence is assessed via the Gelman–Rubin
+diagnostic ($\hat{R} < 1.1$ for all parameters).
 
-The estimand is $\beta_{\text{label}}$.  **If the 95% credible interval
-includes zero**, we conclude that the SI/FT label adds no predictive value
-beyond movement features.
+The estimand is $\beta_{\text{label}}$.  **A 95% credible interval that includes
+zero** implies the SL/ST label adds no predictive value beyond movement.
+**An interval that excludes zero** indicates the classification carries genuine
+predictive information.
 
 ## Results
 
@@ -223,12 +249,12 @@ get_label_summary <- function(fit) {
 }
 
 label_tab <- bind_rows(
-  as.data.frame(t(get_label_summary(jags_results$fit_ground_ball))),
   as.data.frame(t(get_label_summary(jags_results$fit_whiff))),
+  as.data.frame(t(get_label_summary(jags_results$fit_chase))),
   as.data.frame(t(get_label_summary(jags_results$fit_woba)))
 ) |>
   mutate(
-    Outcome = c("Ground ball rate", "Whiff rate", "wOBA against"),
+    Outcome = c("Whiff rate", "Chase rate", "wOBA against"),
     across(where(is.numeric), ~ round(., 3))
   ) |>
   select(Outcome, mean, sd, `2.5%`, `97.5%`, Rhat)
@@ -238,59 +264,54 @@ label_tab <- bind_rows(
 kable(
   label_tab,
   col.names = c("Outcome", "Mean", "SD", "2.5%", "97.5%", "$\\hat{R}$"),
-  caption   = "Posterior summaries for $\\beta_{\\text{label}}$ (SI vs.\\ FT effect). All $\\hat{R} < 1.1$ indicates convergence.",
+  caption   = "Posterior summaries for $\\beta_{\\text{label}}$ (ST vs.\\ SL effect). All $\\hat{R} < 1.1$ indicates convergence.",
   booktabs  = TRUE,
   escape    = FALSE
 ) |>
   kable_styling(latex_options = "hold_position")
 ```
 
-```{r fig-f4, fig.cap="Posterior densities of the SI/FT label effect across three outcome models. The dashed line marks zero. Intervals straddling zero indicate the label adds no predictive information beyond movement."}
+```{r fig-f4, fig.cap="Posterior densities of the SL/ST label effect across three outcome models. The dashed line marks zero. Intervals straddling zero indicate the label adds no predictive information beyond movement."}
 knitr::include_graphics("figures/F4_beta_label_posterior.png")
 ```
 
-```{r fig-f5, fig.cap="Caterpillar plot of pitcher random intercepts (ground ball model), top and bottom 20 by posterior mean. Bars are 95\\% credible intervals."}
+```{r fig-f5, fig.cap="Caterpillar plot of pitcher random intercepts (whiff model), top and bottom 20 by posterior mean. Bars are 95\\% credible intervals."}
 knitr::include_graphics("figures/F5_pitcher_intercepts.png")
 ```
 
 # Discussion
 
-The two stages of analysis converge on the same conclusion. First, GMM reveals
-that SI and FT pitches do not occupy separable regions of movement–speed space:
-the BIC-optimal solution prefers `r g_opt` clusters, and when forced to two,
-those clusters do not align with the Statcast labels (ARI = `r ari_g2`), a
-finding consistent with @dvorocsik2019's demonstration of within-type
-heterogeneity across pitch classifications. Second, the posterior distributions
-of $\beta_{\text{label}}$ are centred near zero with 95% credible intervals
-that include zero for all three outcomes, indicating that the SI/FT label
-carries negligible predictive value for ground ball rate, whiff rate, or wOBA
-against once movement and velocity are controlled.
+The two-stage analysis tests whether the sweeper/slider distinction is real at
+the level of pitch characteristics (Stage 1) and at the level of outcomes
+conditional on characteristics (Stage 2).  The GMM results reveal whether
+movement–speed space contains a natural two-cluster structure that mirrors the
+SL/ST label ($\hat{R}_{\text{adj}} \approx 1$ would support the distinction;
+$\hat{R}_{\text{adj}} \approx 0$ would not).  The posterior distributions of
+$\beta_{\text{label}}$ then test whether knowing the label adds outcome
+predictability beyond what movement already captures.
 
-These findings have implications for player evaluation. Analysts who treat SI
-and FT as distinct pitch types — computing separate strikeout rates, ground ball
-rates, or run values — may be introducing artificial signal. Pooling the two
-types, or relying on continuous movement features rather than categorical labels,
-is likely to produce more stable summaries. The Bayesian framework of
-@olubayode2025 demonstrates the feasibility of this kind of approach for
-adjacent questions in pitch modelling.
-
-**Limitations.** (1) Our ground ball proxy reconstructs batted-ball type from
-event codes rather than the `bb_type` field, which requires a direct Baseball
-Savant CSV download. (2) Grip mechanics and pitcher intent are unobserved.
-(3) The wOBA weights are fixed at population averages and ignore park and
-context effects. (4) The Kéry & Schaub flat priors on precisions are standard
-in ecological applications but may be less appropriate on the logit scale;
-prior sensitivity analysis is warranted. (5) The SI/FT label is assigned
-algorithmically and has shifted over time as Statcast's classification
-algorithm evolved, introducing potential label noise.
+Several limitations warrant mention.  (1) The `ST` label was introduced
+partway through 2022, so some pitches thrown early in that season that would now
+be classified as sweepers may still carry the `SL` label, introducing
+measurement error in precisely the first data-year.  Restricting to 2023–2024
+is a useful sensitivity check.  (2) The chase-rate outcome conditions on
+out-of-zone pitches, which is itself correlated with pitch type, potentially
+inducing collider bias; this should be explored.  (3) The Kéry & Schaub flat
+priors on precisions may be less well-calibrated on the logit scale than in
+ecological count-data contexts; prior sensitivity analysis is warranted.
+(4) Handedness matchup (same- vs. opposite-side) is not included as a covariate
+here, though sweepers are particularly effective against same-handed batters —
+including a matchup interaction is a natural extension.
 
 # Conclusion
 
-The SI/FT distinction in Statcast data does not reflect a meaningful bimodal
-partition of physical pitch characteristics, and the label does not improve
-outcome prediction beyond what movement and velocity already capture. We
-recommend that researchers and practitioners exercise caution when treating the
-two pitch types as distinct categories.
+Whether the sweeper represents a genuinely new pitch type or a relabeling of
+the extreme end of the slider movement spectrum is an empirical question with
+real consequences for how pitchers and analysts interpret the Statcast
+classification system.  This study provides a principled two-stage framework —
+geometric separability via GMM, then outcome predictability via Bayesian
+hierarchical regression — that can be used to adjudicate the question and, more
+broadly, to evaluate the validity of any Statcast pitch classification.
 
 # References
 

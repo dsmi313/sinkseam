@@ -1,22 +1,34 @@
 # 03_gmm.R
 # Gaussian mixture model on (pfx_x_adj, pfx_z, release_speed) — all
-# standardized — to ask whether data-driven clusters align with SI/FT labels.
+# standardized — to ask whether data-driven clusters align with SL/ST labels.
+#
+# Open question (see concept paper): should release_spin_axis be included as a
+# 4th clustering feature?  Set INCLUDE_SPIN_AXIS = TRUE to add it.
+# Default is FALSE because the primary test is movement-and-speed separability;
+# spin axis can be reported as a sensitivity check.
 #
 # Strategy:
 #   1. Fit GMMs with G = 2..8 components via mclust::Mclust (BIC selection).
 #   2. Retain the BIC-optimal model and the forced-G=2 model for comparison.
 #   3. Compute adjusted Rand index (ARI) between GMM hard assignments and
-#      the SI/FT label to quantify label–cluster alignment.
+#      the SL/ST label to quantify label-cluster alignment.
 #   4. Save results and the cluster-assignment column to data/clean/.
 
 library(dplyr)
 library(mclust)
 
-clean <- readRDS("data/clean/si_ft_clean.rds")
+INCLUDE_SPIN_AXIS <- FALSE  # set TRUE to add spin_axis_z as a 4th GMM feature
+
+clean <- readRDS("data/clean/sl_st_clean.rds")
+
+feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z")
+if (INCLUDE_SPIN_AXIS) feature_cols <- c(feature_cols, "spin_axis_z")
 
 features <- clean |>
-  select(pfx_x_z, pfx_z_z, speed_z) |>
+  select(all_of(feature_cols)) |>
   as.matrix()
+
+message(sprintf("GMM features: %s", paste(feature_cols, collapse = ", ")))
 
 set.seed(42)
 
@@ -40,9 +52,8 @@ message(sprintf("ARI (forced G=2):        %.3f", ari_g2))
 # Attach cluster assignments to clean data.
 clean <- clean |>
   mutate(
-    cluster_bic = fit_bic$classification,
-    cluster_g2  = fit_g2$classification,
-    # Soft membership: posterior probability of the most likely cluster.
+    cluster_bic     = fit_bic$classification,
+    cluster_g2      = fit_g2$classification,
     cluster_g2_prob = apply(fit_g2$z, 1, max)
   )
 
@@ -51,19 +62,20 @@ tab <- table(GMM_cluster = clean$cluster_g2, Label = clean$pitch_type)
 message("Contingency table (forced G=2 vs. pitch label):")
 print(tab)
 
-# Purity: fraction of the majority label within each cluster.
 purity <- sum(apply(tab, 1, max)) / sum(tab)
 message(sprintf("Cluster purity (G=2): %.3f", purity))
 
 gmm_results <- list(
-  fit_bic  = fit_bic,
-  fit_g2   = fit_g2,
-  ari_bic  = ari_bic,
-  ari_g2   = ari_g2,
-  purity   = purity,
-  tab_g2   = tab
+  fit_bic         = fit_bic,
+  fit_g2          = fit_g2,
+  ari_bic         = ari_bic,
+  ari_g2          = ari_g2,
+  purity          = purity,
+  tab_g2          = tab,
+  feature_cols    = feature_cols,
+  include_spin_axis = INCLUDE_SPIN_AXIS
 )
 
 saveRDS(gmm_results, "data/clean/gmm_results.rds")
-saveRDS(clean,       "data/clean/si_ft_clean.rds")  # overwrite with cluster cols
+saveRDS(clean,       "data/clean/sl_st_clean.rds")  # overwrite with cluster cols
 message("GMM results saved to data/clean/gmm_results.rds")

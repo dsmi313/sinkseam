@@ -1,28 +1,30 @@
 # 02_clean.R
-# Cleans raw Statcast SI/FT data and engineers the three outcome variables:
-#   ground_ball  – binary, 1 if batted ball type is ground ball
-#   whiff        – binary, 1 if swing-and-miss
-#   woba_contact – numeric wOBA weights for balls in play (NA for non-contact)
+# Cleans raw Statcast SL/ST data and engineers the three outcome variables:
+#   whiff  – binary, 1 if swing-and-miss or foul-tip
+#   chase  – binary, 1 if out-of-zone pitch with a swing (NA for in-zone)
+#   woba   – numeric wOBA weight for plate-appearance-ending pitches
 #
-# Key transformation: flip pfx_x sign for LHP so arm-side movement is always
-# positive, matching the convention used by most movement-profile research.
+# Key transformation: flip pfx_x sign for RHP so glove-side break is always
+# positive regardless of handedness.  For sliders/sweepers the relevant
+# movement direction is toward the glove, not the arm — the opposite
+# convention from sinkers/two-seamers.
 #
-# Saves: data/clean/si_ft_clean.rds
+# Saves: data/clean/sl_st_clean.rds
 
 library(dplyr)
 
-raw <- readRDS("data/raw/statcast_si_ft.rds")
+raw <- readRDS("data/raw/statcast_sl_st.rds")
 
-# wOBA linear weights (2020-2023 average, source: FanGraphs guts page).
+# wOBA linear weights (2022-2024 average, source: FanGraphs guts page).
 # Update these weights if the year range changes.
 WOBA_WEIGHTS <- c(
-  single      = 0.888,
-  double      = 1.271,
-  triple      = 1.616,
-  home_run    = 2.101,
-  walk        = 0.690,
-  hit_by_pitch = 0.720,
-  out         = 0.000
+  single       = 0.883,
+  double       = 1.263,
+  triple       = 1.601,
+  home_run     = 2.063,
+  walk         = 0.693,
+  hit_by_pitch = 0.722,
+  out          = 0.000
 )
 
 event_to_woba <- function(events) {
@@ -42,55 +44,62 @@ event_to_woba <- function(events) {
   )
 }
 
+# Descriptions that constitute a swing.
+SWING_DESCRIPTIONS <- c(
+  "swinging_strike", "swinging_strike_blocked", "foul_tip",
+  "foul", "foul_bunt", "missed_bunt",
+  "hit_into_play", "hit_into_play_no_out", "hit_into_play_score"
+)
+
 clean <- raw |>
   mutate(
-    # Arm-side movement convention: positive = arm side for both hands.
-    pfx_x_adj = if_else(p_throws == "L", -pfx_x, pfx_x),
+    # Glove-side movement convention: positive = glove side for both hands.
+    # For sliders/sweepers the horizontal break is toward the glove, so we
+    # flip RHP (whose sliders have negative pfx_x in Statcast) to positive.
+    pfx_x_adj = if_else(p_throws == "R", -pfx_x, pfx_x),
 
-    # Outcome 1: ground ball (batted-ball type via description/events proxy).
-    # Statcast does not return bb_type directly from statcast_search; we
-    # reconstruct from 'events'. Treat grounded_into_double_play as GB.
-    ground_ball = as.integer(
-      events %in% c("field_out", "grounded_into_double_play",
-                    "double_play", "fielders_choice_out", "fielders_choice",
-                    "force_out") &
-      # A rough proxy: exclude fly-ball-ish events
-      !(events %in% c("sac_fly"))
-    ),
-    # Note: This is a rough proxy.  A cleaner approach uses the bb_type column
-    # from a direct Baseball Savant CSV download.
-
-    # Outcome 2: whiff (swing and miss on this pitch).
+    # Outcome 1: whiff (swing and miss on this pitch).
     whiff = as.integer(description %in% c("swinging_strike",
                                           "swinging_strike_blocked",
                                           "foul_tip")),
 
-    # Outcome 3: wOBA against (defined only on plate-appearance-ending pitches).
+    # Outcome 2: chase (swing at out-of-zone pitch).
+    # Statcast zones 11-14 are outside the strike zone.
+    # NA for in-zone pitches — the JAGS model filters to non-NA rows.
+    chase = case_when(
+      zone %in% 11:14 & description %in% SWING_DESCRIPTIONS ~ 1L,
+      zone %in% 11:14 ~ 0L,
+      TRUE ~ NA_integer_
+    ),
+
+    # Outcome 3: wOBA against (defined only for plate-appearance-ending pitches).
     woba = event_to_woba(events),
 
-    # Label as integer for JAGS (SI = 1, FT = 0).
-    label_si = as.integer(pitch_type == "SI"),
+    # Label as integer for JAGS (ST = 1, SL = 0).
+    label_st = as.integer(pitch_type == "ST"),
 
     # Pitcher ID as a consecutive integer index (required by JAGS).
     pitcher_id = as.integer(factor(pitcher))
   ) |>
-  # Standardize movement and speed for GMM and JAGS.
+  # Standardize movement, speed, and spin axis for GMM and JAGS.
   mutate(
-    pfx_x_z   = scale(pfx_x_adj)[, 1],
-    pfx_z_z   = scale(pfx_z)[, 1],
-    speed_z   = scale(release_speed)[, 1]
+    pfx_x_z      = scale(pfx_x_adj)[, 1],
+    pfx_z_z      = scale(pfx_z)[, 1],
+    speed_z      = scale(release_speed)[, 1],
+    spin_axis_z  = scale(release_spin_axis)[, 1]
   ) |>
   select(
-    game_date, pitcher, pitcher_id, batter, pitch_type, label_si,
+    game_date, pitcher, pitcher_id, batter, pitch_type, label_st,
     p_throws, stand,
-    release_speed, release_spin_rate, pfx_x, pfx_z, pfx_x_adj,
-    pfx_x_z, pfx_z_z, speed_z,
-    description, events,
-    ground_ball, whiff, woba
+    release_speed, release_spin_rate, release_spin_axis,
+    pfx_x, pfx_z, pfx_x_adj,
+    pfx_x_z, pfx_z_z, speed_z, spin_axis_z,
+    description, events, zone,
+    whiff, chase, woba
   )
 
-saveRDS(clean, "data/clean/si_ft_clean.rds")
+saveRDS(clean, "data/clean/sl_st_clean.rds")
 message(sprintf(
-  "Saved %d pitches (%d pitchers) to data/clean/si_ft_clean.rds",
+  "Saved %d pitches (%d pitchers) to data/clean/sl_st_clean.rds",
   nrow(clean), n_distinct(clean$pitcher)
 ))

@@ -3,11 +3,11 @@
 # All plots are saved to reports/figures/ as 300-dpi PNGs.
 #
 # Figure list:
-#   F1  – Movement profile scatter (pfx_x_adj vs pfx_z), coloured by SI/FT
+#   F1  – Movement profile scatter (pfx_x_adj vs pfx_z), coloured by SL/ST
 #   F2  – GMM cluster assignments (G=2) vs. pitch label — side-by-side scatter
 #   F3  – BIC curve across G = 2..8
 #   F4  – Posterior density of beta_label for each of the three outcomes
-#   F5  – Caterpillar plot of pitcher random intercepts (ground ball model)
+#   F5  – Caterpillar plot of pitcher random intercepts (whiff model)
 
 library(dplyr)
 library(ggplot2)
@@ -16,7 +16,7 @@ library(purrr)
 
 dir.create("reports/figures", recursive = TRUE, showWarnings = FALSE)
 
-clean        <- readRDS("data/clean/si_ft_clean.rds")
+clean        <- readRDS("data/clean/sl_st_clean.rds")
 gmm_results  <- readRDS("data/clean/gmm_results.rds")
 jags_results <- readRDS("data/clean/jags_results.rds")
 
@@ -41,15 +41,15 @@ sub <- clean |> slice_sample(n = min(30000, nrow(clean)))
 f1 <- ggplot(sub, aes(pfx_x_adj, pfx_z, colour = pitch_type)) +
   geom_point(alpha = 0.15, size = 0.6) +
   scale_colour_manual(
-    values = c(FT = "#E69F00", SI = "#0072B2"),
-    labels = c(FT = "Two-seam (FT)", SI = "Sinker (SI)")
+    values = c(SL = "#D55E00", ST = "#009E73"),
+    labels = c(SL = "Slider (SL)", ST = "Sweeper (ST)")
   ) +
   labs(
-    x       = "Arm-side break (pfx_x, adj., inches)",
+    x       = "Glove-side break (pfx_x, adj., inches)",
     y       = "Vertical break (pfx_z, inches)",
     colour  = NULL,
-    title   = "Movement profiles: SI vs. FT (2020–2023)",
-    caption = "pfx_x sign flipped for LHP so arm-side is always positive"
+    title   = "Movement profiles: SL vs. ST (2022-2024)",
+    caption = "pfx_x sign flipped for RHP so glove-side break is always positive"
   ) +
   theme_jqas
 
@@ -64,11 +64,11 @@ f2 <- ggplot(sub2, aes(pfx_x_adj, pfx_z, colour = pitch_type)) +
   geom_point(alpha = 0.15, size = 0.6) +
   facet_wrap(~ cluster_g2) +
   scale_colour_manual(
-    values = c(FT = "#E69F00", SI = "#0072B2"),
-    labels = c(FT = "FT", SI = "SI")
+    values = c(SL = "#D55E00", ST = "#009E73"),
+    labels = c(SL = "SL", ST = "ST")
   ) +
   labs(
-    x      = "Arm-side break (inches)",
+    x      = "Glove-side break (inches)",
     y      = "Vertical break (inches)",
     colour = "Statcast label",
     title  = "GMM clusters (G=2) vs. pitch label"
@@ -103,15 +103,14 @@ save_fig(f3, "F3_bic_curve", width = 6, height = 4)
 
 # Figure 4: Posterior densities of beta_label across three outcomes.
 extract_samples <- function(fit, outcome_label) {
-  # jagsUI stores MCMC chains as an mcmc.list under fit$samples.
   samps <- do.call(rbind, lapply(fit$samples, as.data.frame))
   data.frame(value = samps[["beta_label"]], outcome = outcome_label)
 }
 
 post_df <- bind_rows(
-  extract_samples(jags_results$fit_ground_ball, "Ground ball rate"),
-  extract_samples(jags_results$fit_whiff,       "Whiff rate"),
-  extract_samples(jags_results$fit_woba,        "wOBA against")
+  extract_samples(jags_results$fit_whiff, "Whiff rate"),
+  extract_samples(jags_results$fit_chase, "Chase rate"),
+  extract_samples(jags_results$fit_woba,  "wOBA against")
 )
 
 f4 <- ggplot(post_df, aes(value, fill = outcome, colour = outcome)) +
@@ -119,9 +118,9 @@ f4 <- ggplot(post_df, aes(value, fill = outcome, colour = outcome)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
   facet_wrap(~ outcome, scales = "free_y") +
   labs(
-    x     = expression(beta["label"] ~ "(SI vs. FT effect, log-odds or raw)"),
+    x     = expression(beta["label"] ~ "(ST vs. SL effect, log-odds or raw)"),
     y     = "Posterior density",
-    title = "Posterior distribution of SI/FT label effect",
+    title = "Posterior distribution of SL/ST label effect",
     fill  = NULL, colour = NULL
   ) +
   theme_jqas +
@@ -129,13 +128,13 @@ f4 <- ggplot(post_df, aes(value, fill = outcome, colour = outcome)) +
 
 save_fig(f4, "F4_beta_label_posterior", width = 9, height = 4)
 
-# Figure 5: Pitcher random intercepts — ground ball model, top/bottom 20.
+# Figure 5: Pitcher random intercepts — whiff model, top/bottom 20.
 alpha_cols <- grep("^alpha\\[", colnames(
-  as.data.frame(do.call(rbind, lapply(jags_results$fit_ground_ball$samples,
+  as.data.frame(do.call(rbind, lapply(jags_results$fit_whiff$samples,
                                       as.data.frame)))
 ), value = TRUE)
 
-alpha_df <- jags_results$fit_ground_ball$summary[alpha_cols, ] |>
+alpha_df <- jags_results$fit_whiff$summary[alpha_cols, ] |>
   as.data.frame() |>
   tibble::rownames_to_column("node") |>
   mutate(pitcher_idx = as.integer(sub("alpha\\[(\\d+)\\]", "\\1", node))) |>
@@ -150,7 +149,7 @@ f5 <- ggplot(alpha_df, aes(mean, node)) +
   labs(
     x     = "Pitcher random intercept (log-odds)",
     y     = "Pitcher (index)",
-    title = "Top/bottom 20 pitcher random intercepts — ground ball model"
+    title = "Top/bottom 20 pitcher random intercepts — whiff model"
   ) +
   theme_jqas
 
