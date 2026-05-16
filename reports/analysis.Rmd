@@ -183,7 +183,7 @@ PC1 captures the horizontal/vertical break trade-off: curveballs load heavily on
 vertical drop; sweepers load heavily on horizontal break. PC2 broadly separates
 velocity and spin from movement magnitude.
 
-```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Filled 2D density contours show where each label's pitches concentrate; overlapping contours support the continuum hypothesis. Arrows show feature loadings scaled to the point-cloud range."}
+```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Shaded regions show the 50% kernel density contour for each label — the core occupied territory. Overlapping cores support the continuum hypothesis. Arrows show feature loadings scaled to the point-cloud range."}
 set.seed(1)
 label_colours <- c(CU = "#0072B2", SL = "#D55E00", ST = "#009E73")
 label_names   <- c(CU = "Curveball", SL = "Slider",  ST = "Sweeper")
@@ -193,13 +193,14 @@ scores_plot <- all_scores |> slice_sample(n = min(nrow(all_scores), 25000))
 ggplot(scores_plot, aes(x = PC1, y = PC2, colour = pitch_type, fill = pitch_type)) +
   geom_hline(yintercept = 0, linetype = "dotted", colour = "grey60") +
   geom_vline(xintercept = 0, linetype = "dotted", colour = "grey60") +
+  geom_point(alpha = 0.06, size = 0.4) +
   stat_density_2d(
-    aes(alpha = after_stat(level)),
-    geom  = "polygon",
-    bins  = 8,
-    linewidth = 0.3
+    geom         = "polygon",
+    contour_var  = "ndensity",
+    breaks       = 0.5,
+    alpha        = 0.35,
+    linewidth    = 0.6
   ) +
-  geom_point(alpha = 0.08, size = 0.4) +
   geom_segment(
     data = loadings_raw,
     aes(x = 0, xend = PC1, y = 0, yend = PC2),
@@ -216,7 +217,6 @@ ggplot(scores_plot, aes(x = PC1, y = PC2, colour = pitch_type, fill = pitch_type
   ) +
   scale_colour_manual(values = label_colours, labels = label_names) +
   scale_fill_manual(values   = label_colours, labels = label_names) +
-  scale_alpha_continuous(range = c(0.05, 0.35), guide = "none") +
   labs(
     x      = sprintf("PC1 (%.1f%% variance)", var_exp[1] * 100),
     y      = sprintf("PC2 (%.1f%% variance)", var_exp[2] * 100),
