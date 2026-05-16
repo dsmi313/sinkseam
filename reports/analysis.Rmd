@@ -1,371 +1,555 @@
 ---
-title: "Breaking Ball Taxonomy in MLB Statcast: Are Curveball, Slider, and Sweeper Meaningfully Distinct?"
-subtitle: "Slider vs. Sweeper vs. Curveball — sinkseam"
-author: "[Your Name]"
+title: "Breaking Ball Taxonomy: Curveball, Slider, and Sweeper"
 date: "`r Sys.Date()`"
 output:
-  bookdown::pdf_document2:
+  html_document:
     toc: true
-    toc_depth: 3
-    number_sections: true
-    keep_tex: false
-bibliography: references.bib
-csl: apa.csl
+    toc_float: true
+    code_folding: hide
+    theme: flatly
+    fig_width: 9
+    fig_height: 5.5
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
-  echo    = FALSE,
-  warning = FALSE,
+  echo    = TRUE,
   message = FALSE,
-  fig.align = "center",
-  out.width = "100%"
+  warning = FALSE,
+  cache   = FALSE
 )
+```
+
+```{r libraries}
 library(dplyr)
-library(knitr)
-library(kableExtra)
+library(tidyr)
 library(ggplot2)
+library(mclust)
+library(jagsUI)
+library(httr)
+library(readr)
+library(knitr)
+library(tibble)
 ```
 
-```{r load-data}
-clean        <- readRDS(here::here("data/clean/cu_sl_st_clean.rds"))
-pca_results  <- readRDS(here::here("data/clean/pca_results.rds"))
-gmm_results  <- readRDS(here::here("data/clean/gmm_results.rds"))
-jags_results <- readRDS(here::here("data/clean/jags_results.rds"))
+## Data
 
-n_pitches  <- nrow(clean)
-n_pitchers <- n_distinct(clean$pitcher)
-n_cu <- sum(clean$pitch_type == "CU")
-n_sl <- sum(clean$pitch_type == "SL")
-n_st <- sum(clean$pitch_type == "ST")
-years <- "2022–2024"
-```
+Knit this file from the project root directory. If `data/raw/statcast_breaking.rds`
+does not exist, the chunk below pulls CU, SL, and ST pitches for 2022–2024
+directly from Baseball Savant (no baseballr required). This takes several minutes
+and requires an internet connection.
 
-# Introduction
+```{r data-pull}
+data_path <- file.path("data", "raw", "statcast_breaking.rds")
 
-Major League Baseball's Statcast system classifies every pitch into a discrete
-category. For breaking balls, three labels are currently in use: the curveball
-(`CU`), the slider (`SL`), and the sweeper (`ST`). Each occupies a distinct
-niche in broadcast and analytics discourse — curveballs are described as
-high-drop "12-to-6" pitches, sliders as sharper and more horizontal, and
-sweepers as the extreme horizontal-break variant that has reshaped modern
-pitching strategy.
+if (!file.exists(data_path)) {
 
-But these descriptions trace a continuum, not three separate populations.  The
-movement space from curveball to sweeper — decreasing vertical drop, increasing
-horizontal break — is theoretically smooth, and there is no obvious physical
-reason why a pitch at any intermediate point should belong unambiguously to one
-label or another.  The sweeper label itself is recent: Statcast introduced `ST`
-around 2022–2023, reclassifying pitches that had previously been called sliders.
-Before that boundary was drawn, no one argued those pitches were categorically
-different from the sliders around them.
-
-This study asks whether the three-label breaking-ball taxonomy is empirically
-justified.  We apply three complementary analyses to
-`r format(n_pitches, big.mark = ",")` CU, SL, and ST pitches thrown by
-`r n_pitchers` pitchers from `r years`:
-
-1. **PCA** to visualize the structure of movement space;
-2. **GMM** to formally test whether the data support three natural clusters;
-3. **Bayesian hierarchical regression** to test whether the labels predict
-   outcomes — whiff rate, chase rate, and wOBA against — above and beyond the
-   movement features themselves.
-
-# Historical Context
-
-This is not the first time a Statcast classification boundary has been
-contested. The sinker (`SI`) and two-seam fastball (`FT`) coexisted as distinct
-labels from the introduction of Statcast through approximately 2020, despite
-substantial overlap in their movement profiles [@dvorocsik2019]. MLB eventually
-deprecated `FT`, absorbing two-seamers into the sinker category. The
-sabermetric community had anticipated this — empirically, the two types were
-never geometrically separable.
-
-The sweeper presents the same question, but in the opposite direction: a label
-was *added* rather than removed, drawing a new boundary inside what had
-previously been a single category. Whether that boundary reflects a real
-discontinuity in pitch characteristics and outcomes — or whether it is a
-taxonomic artifact of an evolving algorithmic classifier — is the question this
-paper addresses.
-
-# Research Question
-
-**Does the CU/SL/ST pitch label predict outcomes above and beyond the movement
-features themselves?**
-
-We decompose this into two sub-questions:
-
-1. **Geometric:** Does the movement–speed space of breaking balls contain three
-   natural clusters that align with the CU/SL/ST labels, or does it form a
-   single elongated continuum?
-2. **Predictive:** After conditioning on movement features (horizontal break,
-   induced vertical break, velocity), does knowing the pitch label tell us
-   anything additional about whiff rate, chase rate, or wOBA against?
-
-If the answer to both is no, the breaking-ball taxonomy is unsupported.
-
-# Data
-
-Data come from MLB Statcast via Baseball Savant, accessed through the
-`baseballr` R package [@baumer2023].  We retain all pitches classified as CU,
-SL, or ST from regular-season games in `r years`
-(CU: `r format(n_cu, big.mark = ",")`; SL: `r format(n_sl, big.mark = ",")`;
-ST: `r format(n_st, big.mark = ",")`). The sample begins in 2022 because the
-`ST` label did not exist before then.
-
-**Key variables:**
-
-| Variable | Description |
-|---|---|
-| `pitch_type` | CU, SL, or ST |
-| `pfx_x` | Horizontal movement (inches, relative to gyroball) |
-| `pfx_z` | Induced vertical break (inches) |
-| `release_speed` | Velocity at release (mph) |
-| `release_spin_rate` | Spin rate (rpm) |
-| `release_spin_axis` | Spin axis (degrees) |
-| `p_throws` | Pitcher handedness (L/R) |
-
-**Preprocessing:** `pfx_x` is sign-flipped for left-handed pitchers so that
-glove-side break is consistently directed regardless of handedness.  After
-adjustment, arm-side movement is positive and glove-side movement (the dominant
-direction for all three pitch types) is negative.  All three movement/speed
-features are standardized ($\mu = 0$, $\sigma = 1$) before modelling.
-Spin axis is standardized and available as an optional fourth feature.
-
-**Outcomes:**
-
-- **Whiff** (binary): swing-and-miss or foul-tip.
-- **Chase** (binary): swing at an out-of-zone pitch (zones 11–14); NA for
-  in-zone pitches.
-- **wOBA against** (continuous): linear-weight wOBA for PA-ending pitches,
-  using `r years` average weights.
-
-# Stage 1: Principal Component Analysis
-
-## Method
-
-We apply PCA to the three standardized features (pfx\_x, pfx\_z, release
-speed) to characterize the shape of breaking-ball movement space.  The
-continuum hypothesis predicts that PC1 will capture the trade-off between
-vertical drop (curveball end) and horizontal break (sweeper end), producing one
-elongated cloud rather than three distinct clusters.
-
-## Results
-
-```{r pca-summary}
-var1 <- round(pca_results$var_exp[1] * 100, 1)
-var2 <- round(pca_results$var_exp[2] * 100, 1)
-cum2 <- round(pca_results$cum_var[2] * 100, 1)
-```
-
-PC1 explains `r var1`% of variance; PC1 and PC2 together explain `r cum2`%.
-The PCA biplot (Figure \@ref(fig:fig-f2)) shows
-`r if(cum2 > 85) "a single elongated cloud" else "the primary structure"` in
-breaking-ball movement space.
-
-```{r pca-loadings}
-ldg <- as.data.frame(round(pca_results$pca$rotation[, 1:3], 3)) |>
-  tibble::rownames_to_column("Feature") |>
-  mutate(Feature = recode(Feature,
-    pfx_x_z = "Horiz. break (pfx\\_x, adj.)",
-    pfx_z_z = "Vert. break (pfx\\_z)",
-    speed_z = "Release speed"))
-```
-
-```{r pca-tab}
-kable(
-  ldg,
-  caption = "PCA loadings for the first three principal components.",
-  booktabs = TRUE
-) |>
-  kable_styling(latex_options = "hold_position")
-```
-
-```{r fig-f1, fig.cap="Movement profiles for CU (blue), SL (orange), and ST (green). pfx\\_x is sign-flipped for LHP so glove-side break is consistently negative."}
-knitr::include_graphics("figures/F1_movement_scatter.png")
-```
-
-```{r fig-f2, fig.cap="PCA biplot of breaking-ball movement space. Arrows show feature loadings scaled to the score cloud. A single elongated cloud would support the continuum hypothesis; three well-separated regions would support distinct categories."}
-knitr::include_graphics("figures/F2_pca_biplot.png")
-```
-
-# Stage 2: Gaussian Mixture Modelling
-
-## Method
-
-We fit GMMs via `mclust` [@scrucca2016] to the three standardized features,
-selecting the number of components $G \in \{2,\ldots,8\}$ and covariance
-parameterization jointly by BIC.  Three solutions are reported:
-
-- **Forced G = 2**: is there a single split?
-- **Forced G = 3**: do three clusters recover the CU/SL/ST labels?
-- **BIC-optimal**: what does the data prefer?
-
-Cluster–label alignment is quantified by the ARI [@hubert1985].
-
-## Results
-
-```{r gmm-summary}
-g_opt    <- gmm_results$fit_bic$G
-mod_name <- gmm_results$fit_bic$modelName
-ari_g2   <- round(gmm_results$ari_g2, 3)
-ari_g3   <- round(gmm_results$ari_g3, 3)
-ari_bic  <- round(gmm_results$ari_bic, 3)
-pur_g3   <- round(gmm_results$purity_g3, 3)
-```
-
-The BIC-optimal solution selected $G = `r g_opt`$ components
-(model `r mod_name`).  The forced $G = 3$ solution yields ARI = `r ari_g3`
-against the three Statcast labels (Table \@ref(tab:gmm-tab-g3)); the forced
-$G = 2$ solution yields ARI = `r ari_g2`; the BIC-optimal yields ARI =
-`r ari_bic`.  Cluster purity for the forced $G = 3$ solution is `r pur_g3`.
-
-```{r gmm-tab-g3}
-tab_df <- as.data.frame.matrix(gmm_results$tab_g3)
-kable(
-  tab_df,
-  caption = "Contingency table: GMM clusters (forced G=3) vs. Statcast label.",
-  booktabs = TRUE
-) |>
-  kable_styling(latex_options = "hold_position")
-```
-
-```{r fig-f3, fig.cap="GMM clusters (forced G=3) coloured by Statcast label. If the three clusters align with CU/SL/ST, each panel should be dominated by one colour."}
-knitr::include_graphics("figures/F3_gmm_g3_vs_label.png")
-```
-
-```{r fig-f4, fig.cap="BIC as a function of GMM components. The dashed red line marks the BIC-optimal solution."}
-knitr::include_graphics("figures/F4_bic_curve.png")
-```
-
-# Stage 3: Bayesian Hierarchical Model
-
-## Model
-
-For each outcome $y_i$ (pitch $i$ thrown by pitcher $j[i]$):
-
-$$g(\mathbb{E}[y_i]) = \alpha_{j[i]} + \beta_x \tilde{x}_i + \beta_z \tilde{z}_i + \beta_v \tilde{v}_i + \beta_{\text{SL}} \cdot \mathbf{1}[\text{SL}]_i + \beta_{\text{ST}} \cdot \mathbf{1}[\text{ST}]_i$$
-
-$$\alpha_j \sim \mathcal{N}(\mu_\alpha,\; \tau_\alpha^{-1})$$
-
-CU is the reference category; $\mathbf{1}[\text{SL}]$ and
-$\mathbf{1}[\text{ST}]$ are binary indicators.  $g$ is the logit link for
-whiff and chase, and the identity link for wOBA.  A pitcher random intercept
-$\alpha_j$ accounts for between-pitcher differences in breaking-ball usage.
-
-The three key estimands are:
-- $\beta_{\text{SL}}$: slider vs. curveball effect, controlling for movement;
-- $\beta_{\text{ST}}$: sweeper vs. curveball effect, controlling for movement;
-- $\beta_{\text{ST}} - \beta_{\text{SL}}$: sweeper vs. slider contrast,
-  computed as a derived quantity inside JAGS.
-
-## Priors
-
-Following @kery2012:
-
-$$\beta_k \sim \mathcal{N}(0,\; 0.001^{-1}), \quad \mu_\alpha \sim \mathcal{N}(0,\; 0.001^{-1}), \quad \tau_\alpha,\, \tau \sim \text{Gamma}(0.001,\; 0.001)$$
-
-## Inference
-
-Three chains, 5,000 burn-in, thinned by 5, via `jagsUI` [@kellner2021].
-Convergence: $\hat{R} < 1.1$ for all nodes.
-
-## Results
-
-```{r label-tab-data}
-get_label_rows <- function(fit, outcome) {
-  betas  <- c("beta_sl", "beta_st", "beta_st_vs_sl")
-  labels <- c("SL vs. CU", "ST vs. CU", "ST vs. SL")
-  rows <- lapply(seq_along(betas), function(i) {
-    b    <- betas[i]
-    s    <- fit$summary[b, ]
-    rhat <- fit$Rhat[[b]]
-    data.frame(
-      Outcome  = outcome,
-      Contrast = labels[i],
-      Mean     = round(s["mean"], 3),
-      SD       = round(s["sd"],   3),
-      `2.5%`   = round(s["2.5%"], 3),
-      `97.5%`  = round(s["97.5%"], 3),
-      Rhat     = round(rhat, 3),
-      check.names = FALSE
+  pull_savant_chunk <- function(start_date, end_date) {
+    url <- paste0(
+      "https://baseballsavant.mlb.com/statcast_search/csv?all=true",
+      "&hfPT=CU%7CSL%7CST%7C",
+      "&hfGT=R%7C",
+      "&type=details",
+      "&player_type=pitcher",
+      "&game_date_gt=", start_date,
+      "&game_date_lt=", end_date,
+      "&min_pitches=0&min_results=0&min_pas=0"
     )
-  })
-  do.call(rbind, rows)
+    resp <- tryCatch(
+      GET(url,
+          add_headers(`User-Agent` = "Mozilla/5.0 (compatible; R research)"),
+          timeout(120)),
+      error = function(e) NULL
+    )
+    if (is.null(resp) || http_error(resp)) {
+      warning(sprintf("Failed: %s – %s", start_date, end_date))
+      return(NULL)
+    }
+    txt <- content(resp, as = "text", encoding = "UTF-8")
+    if (nchar(trimws(txt)) < 100 || startsWith(trimws(txt), "<")) {
+      warning(sprintf("Non-CSV response: %s – %s", start_date, end_date))
+      return(NULL)
+    }
+    tryCatch(
+      read_csv(I(txt), show_col_types = FALSE, progress = FALSE),
+      error = function(e) NULL
+    )
+  }
+
+  # Monthly chunks for the 2022-2024 regular season (April–September).
+  months <- expand.grid(
+    year  = 2022:2024,
+    month = 4:9,
+    stringsAsFactors = FALSE
+  )
+  starts <- sprintf("%d-%02d-01", months$year, months$month)
+  ends   <- format(
+    as.Date(paste0(months$year, "-", months$month, "-01")) +
+      months::month(1) - 1,
+    "%Y-%m-%d"
+  )
+  # Fallback if 'months' package unavailable: compute end-of-month manually.
+  eom <- function(yr, mo) {
+    as.character(as.Date(sprintf("%d-%02d-01", yr, mo %% 12 + 1)) - 1)
+  }
+  ends <- mapply(eom, months$year, months$month)
+
+  raw_list <- mapply(function(s, e) {
+    Sys.sleep(1)
+    message(sprintf("Pulling %s to %s", s, e))
+    pull_savant_chunk(s, e)
+  }, starts, ends, SIMPLIFY = FALSE)
+
+  raw <- bind_rows(Filter(Negate(is.null), raw_list))
+
+  dir.create(dirname(data_path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(raw, data_path)
+  message(sprintf("Saved %d rows to %s", nrow(raw), data_path))
 }
 
-label_tab <- bind_rows(
-  get_label_rows(jags_results$fit_whiff, "Whiff rate"),
-  get_label_rows(jags_results$fit_chase, "Chase rate"),
-  get_label_rows(jags_results$fit_woba,  "wOBA against")
+breaking_raw <- readRDS(data_path)
+sprintf("Loaded %s rows, %s columns", nrow(breaking_raw), ncol(breaking_raw))
+```
+
+```{r data-prep}
+# Columns required downstream.
+REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws",
+                   "pfx_x", "pfx_z", "release_speed",
+                   "release_spin_rate", "description")
+
+breaking <- breaking_raw |>
+  select(any_of(REQUIRED_COLS)) |>
+  filter(pitch_type %in% c("CU", "SL", "ST")) |>
+  mutate(
+    # Flip pfx_x for LHP so arm-side movement is consistently positive.
+    # After this: glove-side break (dominant for CU/SL/ST) is negative.
+    pfx_x_adj = if_else(p_throws == "L", -pfx_x, pfx_x),
+
+    # Outcome: per-pitch whiff indicator.
+    whiff = as.integer(description == "swinging_strike"),
+
+    # Label dummies — CU is the reference category (both = 0).
+    label_sl = as.integer(pitch_type == "SL"),
+    label_st = as.integer(pitch_type == "ST"),
+
+    # Consecutive pitcher index for JAGS random effects.
+    pitcher_id = as.integer(factor(pitcher))
+  ) |>
+  # Drop any row missing a feature used in PCA/GMM/JAGS.
+  drop_na(pfx_x_adj, pfx_z, release_speed, release_spin_rate) |>
+  # Standardise the four movement/speed features once for reuse downstream.
+  mutate(
+    pfx_x_std  = as.numeric(scale(pfx_x_adj)),
+    pfx_z_std  = as.numeric(scale(pfx_z)),
+    velo_std   = as.numeric(scale(release_speed)),
+    spin_std   = as.numeric(scale(release_spin_rate))
+  )
+
+cat(sprintf(
+  "%s pitches kept — CU: %s  SL: %s  ST: %s  |  %s unique pitchers\n",
+  format(nrow(breaking), big.mark = ","),
+  format(sum(breaking$pitch_type == "CU"), big.mark = ","),
+  format(sum(breaking$pitch_type == "SL"), big.mark = ","),
+  format(sum(breaking$pitch_type == "ST"), big.mark = ","),
+  format(n_distinct(breaking$pitcher), big.mark = ",")
+))
+```
+
+---
+
+## Stage 1: PCA
+
+PCA is run on the four standardised features — horizontal break (`pfx_x_adj`),
+vertical break (`pfx_z`), velocity, and spin rate — to characterise the shape
+of breaking-ball movement space. The **continuum hypothesis** predicts a single
+elongated cloud in PC space rather than three distinct clusters.
+
+```{r pca-fit}
+features_scaled <- breaking |>
+  select(pfx_x_std, pfx_z_std, velo_std, spin_std) |>
+  as.matrix()
+
+pca <- prcomp(features_scaled, center = FALSE, scale. = FALSE)
+
+var_exp <- summary(pca)$importance["Proportion of Variance", ]
+cum_var <- summary(pca)$importance["Cumulative Proportion",  ]
+```
+
+```{r pca-variance-table}
+var_tbl <- data.frame(
+  PC              = paste0("PC", 1:4),
+  `Proportion`    = round(var_exp, 3),
+  `Cumulative`    = round(cum_var, 3),
+  check.names = FALSE
+)
+kable(var_tbl, caption = "Variance explained by each principal component.")
+```
+
+```{r pca-loadings-table}
+ldg <- as.data.frame(round(pca$rotation, 3)) |>
+  rownames_to_column("Feature") |>
+  mutate(Feature = recode(Feature,
+    pfx_x_std = "Horiz. break (pfx_x, adj.)",
+    pfx_z_std = "Vert. break (pfx_z)",
+    velo_std  = "Release speed",
+    spin_std  = "Spin rate"
+  ))
+kable(ldg, caption = "PCA rotation matrix (loadings).")
+```
+
+PC1 typically captures the horizontal/vertical break trade-off: curveballs
+load heavily on vertical drop; sweepers load heavily on horizontal break.
+PC2 often separates velocity and spin rate from movement magnitude.
+
+```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. An elongated single cloud supports the continuum hypothesis; well-separated regions support distinct categories."}
+set.seed(1)
+scores_df <- as.data.frame(pca$x) |>
+  mutate(pitch_type = breaking$pitch_type) |>
+  slice_sample(n = min(n(), 25000))
+
+label_colours <- c(CU = "#0072B2", SL = "#D55E00", ST = "#009E73")
+label_names   <- c(CU = "Curveball", SL = "Slider",  ST = "Sweeper")
+
+ggplot(scores_df, aes(PC1, PC2, colour = pitch_type)) +
+  geom_point(alpha = 0.15, size = 0.6) +
+  scale_colour_manual(values = label_colours, labels = label_names) +
+  labs(
+    x      = sprintf("PC1 (%.1f%% variance)", var_exp[1] * 100),
+    y      = sprintf("PC2 (%.1f%% variance)", var_exp[2] * 100),
+    colour = NULL,
+    title  = "PCA of breaking-ball movement space (2022–2024)"
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size = 2)))
+```
+
+---
+
+## Stage 2: Gaussian Mixture Modelling
+
+GMM via `mclust` is applied to the same four scaled features. The number of
+components $G$ and the covariance parameterisation are selected jointly by BIC.
+Cluster–label alignment is measured with the Adjusted Rand Index (ARI).
+
+```{r gmm-fit, cache=TRUE}
+set.seed(42)
+bic_obj <- mclustBIC(features_scaled, G = 2:9, verbose = FALSE)
+fit_gmm <- Mclust(features_scaled, x = bic_obj, verbose = FALSE)
+
+cat(sprintf("BIC-optimal: G = %d, model = %s\n",
+            fit_gmm$G, fit_gmm$modelName))
+```
+
+```{r gmm-bic-curve, fig.cap="BIC values across candidate numbers of GMM components. Each line is a covariance parameterisation; the peak marks the preferred solution."}
+bic_df <- as.data.frame(bic_obj) |>
+  rownames_to_column("G") |>
+  mutate(G = as.integer(G)) |>
+  pivot_longer(-G, names_to = "model", values_to = "BIC") |>
+  filter(!is.na(BIC))
+
+bic_best <- bic_df |> group_by(G) |> slice_max(BIC, n = 1, with_ties = FALSE)
+
+ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
+  geom_line(alpha = 0.4, linewidth = 0.5) +
+  geom_point(data = bic_best, aes(G, BIC), colour = "black", size = 2.5) +
+  geom_vline(xintercept = fit_gmm$G, linetype = "dashed", colour = "red") +
+  scale_x_continuous(breaks = 2:9) +
+  labs(
+    x      = "Number of GMM components (G)",
+    y      = "BIC",
+    colour = "Model",
+    title  = sprintf("GMM BIC curve — optimal G = %d (%s)",
+                     fit_gmm$G, fit_gmm$modelName)
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        legend.position  = "right",
+        legend.text      = element_text(size = 8))
+```
+
+```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. If clusters align with labels, each cluster region should be dominated by one colour."}
+set.seed(1)
+cluster_df <- data.frame(
+  PC1        = pca$x[, 1],
+  PC2        = pca$x[, 2],
+  pitch_type = breaking$pitch_type,
+  cluster    = factor(fit_gmm$classification)
+) |>
+  slice_sample(n = min(n(), 25000))
+
+ggplot(cluster_df, aes(PC1, PC2)) +
+  geom_point(aes(colour = pitch_type, shape = cluster),
+             alpha = 0.2, size = 0.7) +
+  scale_colour_manual(values = label_colours, labels = label_names) +
+  scale_shape_manual(values = c(16, 17, 15, 3, 4, 8, 7, 13)[seq_len(fit_gmm$G)]) +
+  labs(
+    x      = sprintf("PC1 (%.1f%%)", var_exp[1] * 100),
+    y      = sprintf("PC2 (%.1f%%)", var_exp[2] * 100),
+    colour = "Statcast label",
+    shape  = "GMM cluster",
+    title  = sprintf("GMM clusters (G = %d) vs. Statcast labels", fit_gmm$G)
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), legend.position = "bottom") +
+  guides(
+    colour = guide_legend(override.aes = list(alpha = 1, size = 2)),
+    shape  = guide_legend(override.aes = list(alpha = 1, size = 2))
+  )
+```
+
+```{r gmm-ari}
+ari <- adjustedRandIndex(fit_gmm$classification, breaking$pitch_type)
+cat(sprintf("Adjusted Rand Index (GMM clusters vs. CU/SL/ST labels): %.4f\n", ari))
+
+# Contingency table
+tab <- table(Cluster = fit_gmm$classification, Label = breaking$pitch_type)
+kable(tab, caption = sprintf(
+  "GMM cluster (G = %d) × Statcast label contingency table.", fit_gmm$G))
+```
+
+**ARI interpretation:** ARI near 1 means the clusters closely recover the
+Statcast labels; ARI near 0 means the data-driven boundary has little
+correspondence to the CU/SL/ST taxonomy. An ARI below ~0.2 is consistent with
+a continuum.
+
+---
+
+## Stage 3: Bayesian Hierarchical Model
+
+A logistic hierarchical model estimates whether the pitch-type label predicts
+whiff probability above and beyond the three movement/speed features.
+CU is the reference category; `beta_sl` and `beta_st` are the key estimands.
+
+```{r jags-prep}
+jags_df <- breaking |>
+  filter(!is.na(whiff)) |>
+  mutate(pitcher_idx = as.integer(factor(pitcher_id)))
+
+jags_data <- list(
+  Y          = jags_df$whiff,
+  pfx_x_std  = jags_df$pfx_x_std,
+  pfx_z_std  = jags_df$pfx_z_std,
+  velo_std   = jags_df$velo_std,
+  label_sl   = jags_df$label_sl,
+  label_st   = jags_df$label_st,
+  pitcher_id = jags_df$pitcher_idx,
+  N          = nrow(jags_df),
+  J          = max(jags_df$pitcher_idx)
+)
+
+cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers\n",
+            format(jags_data$N, big.mark = ","),
+            format(jags_data$J, big.mark = ",")))
+```
+
+```{r jags-model-string}
+model_string <- "
+model {
+  for (i in 1:N) {
+    logit(p[i]) <- alpha[pitcher_id[i]] +
+                   beta_pfx_x * pfx_x_std[i] +
+                   beta_pfx_z * pfx_z_std[i] +
+                   beta_velo  * velo_std[i]   +
+                   beta_sl    * label_sl[i]   +
+                   beta_st    * label_st[i]
+    Y[i] ~ dbern(p[i])
+  }
+
+  beta_st_vs_sl <- beta_st - beta_sl
+
+  for (j in 1:J) {
+    alpha[j] ~ dnorm(mu_alpha, tau_alpha)
+  }
+
+  mu_alpha  ~ dnorm(0, 0.001)
+  tau_alpha ~ dgamma(0.001, 0.001)
+
+  beta_pfx_x ~ dnorm(0, 0.001)
+  beta_pfx_z ~ dnorm(0, 0.001)
+  beta_velo  ~ dnorm(0, 0.001)
+  beta_sl    ~ dnorm(0, 0.001)
+  beta_st    ~ dnorm(0, 0.001)
+}
+"
+
+model_file <- tempfile(fileext = ".jags")
+writeLines(model_string, model_file)
+```
+
+```{r jags-run, cache=TRUE, results='hide'}
+inits_fn <- function() list(
+  beta_pfx_x = rnorm(1, 0, 0.1),
+  beta_pfx_z = rnorm(1, 0, 0.1),
+  beta_velo  = rnorm(1, 0, 0.1),
+  beta_sl    = rnorm(1, 0, 0.1),
+  beta_st    = rnorm(1, 0, 0.1),
+  mu_alpha   = rnorm(1, 0, 0.1),
+  tau_alpha  = rgamma(1, 1, 1)
+)
+
+params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
+            "beta_sl", "beta_st", "beta_st_vs_sl",
+            "mu_alpha", "tau_alpha")
+
+fit_jags <- jags(
+  data               = jags_data,
+  inits              = replicate(3, inits_fn(), simplify = FALSE),
+  parameters.to.save = params,
+  model.file         = model_file,
+  n.chains           = 3,
+  n.adapt            = 1000,
+  n.burnin           = 5000,
+  n.iter             = 10000,
+  n.thin             = 2,
+  parallel           = TRUE,
+  verbose            = FALSE
 )
 ```
 
-```{r label-tab-print}
+```{r jags-convergence}
+rhat_vals <- unlist(fit_jags$Rhat)
+rhat_vals <- rhat_vals[!is.na(rhat_vals)]
+n_bad     <- sum(rhat_vals > 1.1)
+max_rhat  <- max(rhat_vals)
+
+cat(sprintf(
+  "Gelman-Rubin check — max R-hat: %.3f  |  nodes > 1.1: %d / %d  |  %s\n",
+  max_rhat, n_bad, length(rhat_vals),
+  if (n_bad == 0) "CONVERGED" else "NOT CONVERGED — interpret with caution"
+))
+```
+
+```{r jags-posterior-table}
+target_params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
+                   "beta_sl", "beta_st", "beta_st_vs_sl",
+                   "mu_alpha", "tau_alpha")
+
+post_tbl <- fit_jags$summary[target_params,
+                              c("mean", "sd", "2.5%", "97.5%", "Rhat"),
+                              drop = FALSE] |>
+  as.data.frame() |>
+  rownames_to_column("Parameter") |>
+  mutate(
+    Parameter = recode(Parameter,
+      beta_pfx_x    = "Horiz. break (β_pfx_x)",
+      beta_pfx_z    = "Vert. break (β_pfx_z)",
+      beta_velo     = "Velocity (β_velo)",
+      beta_sl       = "SL vs. CU (β_sl)",
+      beta_st       = "ST vs. CU (β_st)",
+      beta_st_vs_sl = "ST vs. SL (β_st − β_sl, derived)",
+      mu_alpha      = "Intercept hypermean (μ_α)",
+      tau_alpha     = "Intercept precision (τ_α)"
+    ),
+    across(where(is.numeric), ~ round(., 3))
+  )
+
 kable(
-  label_tab |> select(-Outcome),
-  col.names = c("Contrast", "Mean", "SD", "2.5%", "97.5%", "$\\hat{R}$"),
+  post_tbl,
+  col.names = c("Parameter", "Post. mean", "Post. SD", "2.5%", "97.5%", "R-hat"),
   caption   = paste(
-    "Posterior summaries for label contrasts across three outcome models.",
-    "Reference category is CU. $\\hat{R} < 1.1$ throughout indicates convergence.",
-    "Credible intervals that include zero indicate no evidence for predictive",
-    "value of the label beyond movement."
+    "Posterior summaries for the whiff model.",
+    "Key estimands: β_sl (slider vs. curveball) and β_st (sweeper vs. curveball),",
+    "both controlling for movement and velocity.",
+    "Credible intervals that include zero indicate the label adds no predictive",
+    "value beyond movement features."
+  )
+)
+```
+
+```{r jags-posterior-plot, fig.cap="Posterior distributions for the three pairwise label contrasts. The dashed line marks zero. Distributions centred on zero with 95% CIs that include zero indicate the label does not predict whiff rate beyond movement.", fig.height=4}
+extract_samples <- function(fit, param) {
+  samps <- do.call(rbind, lapply(fit$samples, as.data.frame))
+  samps[[param]]
+}
+
+contrast_df <- bind_rows(
+  data.frame(value    = extract_samples(fit_jags, "beta_sl"),
+             contrast = "SL vs. CU"),
+  data.frame(value    = extract_samples(fit_jags, "beta_st"),
+             contrast = "ST vs. CU"),
+  data.frame(value    = extract_samples(fit_jags, "beta_st_vs_sl"),
+             contrast = "ST vs. SL (derived)")
+)
+
+contrast_colours <- c("SL vs. CU"        = "#D55E00",
+                      "ST vs. CU"        = "#009E73",
+                      "ST vs. SL (derived)" = "#CC79A7")
+
+ci_df <- contrast_df |>
+  group_by(contrast) |>
+  summarise(lo = quantile(value, 0.025), hi = quantile(value, 0.975),
+            .groups = "drop")
+
+ggplot(contrast_df, aes(value, fill = contrast, colour = contrast)) +
+  geom_density(alpha = 0.3, linewidth = 0.8) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30") +
+  geom_segment(
+    data = ci_df,
+    aes(x = lo, xend = hi, y = -Inf, yend = -Inf, colour = contrast),
+    linewidth = 2, lineend = "round", inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(values   = contrast_colours) +
+  scale_colour_manual(values = contrast_colours) +
+  labs(
+    x     = expression(beta ~ "(log-odds of whiff)"),
+    y     = "Posterior density",
+    title = "Posterior distributions of pitch-type label effects on whiff rate",
+    fill  = NULL, colour = NULL
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        legend.position  = "none",
+        strip.background = element_blank())
+```
+
+---
+
+## Summary
+
+```{r summary-table}
+sl_ci <- round(fit_jags$summary["beta_sl",  c("2.5%", "97.5%")], 3)
+st_ci <- round(fit_jags$summary["beta_st",  c("2.5%", "97.5%")], 3)
+stvsl <- round(fit_jags$summary["beta_st_vs_sl", c("2.5%", "97.5%")], 3)
+
+summary_df <- data.frame(
+  Stage   = c("PCA", "GMM", "JAGS — SL vs. CU", "JAGS — ST vs. CU",
+               "JAGS — ST vs. SL"),
+  Finding = c(
+    sprintf("PC1 explains %.1f%%; PC1+PC2 = %.1f%%",
+            var_exp[1]*100, cum_var[2]*100),
+    sprintf("Optimal G = %d (%s); ARI vs. labels = %.3f",
+            fit_gmm$G, fit_gmm$modelName, ari),
+    sprintf("95%% CI [%.3f, %.3f]%s",
+            sl_ci[1], sl_ci[2],
+            if(sl_ci[1] < 0 & sl_ci[2] > 0) " — includes zero" else " — excludes zero"),
+    sprintf("95%% CI [%.3f, %.3f]%s",
+            st_ci[1], st_ci[2],
+            if(st_ci[1] < 0 & st_ci[2] > 0) " — includes zero" else " — excludes zero"),
+    sprintf("95%% CI [%.3f, %.3f]%s",
+            stvsl[1], stvsl[2],
+            if(stvsl[1] < 0 & stvsl[2] > 0) " — includes zero" else " — excludes zero")
   ),
-  booktabs = TRUE,
-  escape   = FALSE
-) |>
-  pack_rows("Whiff rate", 1, 3) |>
-  pack_rows("Chase rate", 4, 6) |>
-  pack_rows("wOBA against", 7, 9) |>
-  kable_styling(latex_options = c("hold_position", "scale_down"))
+  Interpretation = c(
+    if(cum_var[2] > 0.85) "Most variance in two dimensions — consistent with a continuum"
+    else "Variance spread across PCs — possible multimodal structure",
+    if(ari < 0.2) "Low ARI — clusters do not correspond to CU/SL/ST labels"
+    else if(ari < 0.5) "Moderate ARI — partial label–cluster alignment"
+    else "High ARI — clusters align well with labels",
+    if(sl_ci[1] < 0 & sl_ci[2] > 0) "Label adds no evidence of predictive value"
+    else "Label carries incremental predictive value",
+    if(st_ci[1] < 0 & st_ci[2] > 0) "Label adds no evidence of predictive value"
+    else "Label carries incremental predictive value",
+    if(stvsl[1] < 0 & stvsl[2] > 0) "SL and ST not distinguishable on whiff outcomes"
+    else "SL and ST distinguishable on whiff outcomes"
+  )
+)
+
+kable(summary_df, caption = "Summary of findings across all three analysis stages.")
 ```
 
-```{r fig-f5, fig.cap="Posterior densities for the three pairwise label contrasts (columns) across three outcomes (rows). The dashed line marks zero. Distributions centred on zero with intervals straddling zero indicate the labels add no predictive information beyond movement."}
-knitr::include_graphics("figures/F5_beta_posteriors.png")
-```
-
-```{r fig-f6, fig.cap="Top and bottom 20 pitcher random intercepts from the whiff model (95\\% credible intervals). Large between-pitcher variation motivates the partial-pooling structure."}
-knitr::include_graphics("figures/F6_pitcher_intercepts.png")
-```
-
-# Discussion
-
-The three-stage analysis provides a coherent answer to whether the CU/SL/ST
-taxonomy is empirically justified.  If the PCA cloud is elongated rather than
-trimodal, the GMM prefers $G \neq 3$ or yields low ARI at $G = 3$, and the
-posterior distributions of $\beta_{\text{SL}}$, $\beta_{\text{ST}}$, and
-$\beta_{\text{ST}} - \beta_{\text{SL}}$ are all centred near zero — the
-taxonomy is a continuum, not three distinct categories.
-
-A finding that the labels *do* carry predictive information after controlling
-for movement would be equally interpretable: it would mean that pitchers
-classified as sweeper-throwers deploy their pitches in systematically different
-counts, locations, or matchups in ways that produce different outcomes
-regardless of the movement profile — suggesting that the label captures
-something real about pitcher strategy, even if the movement profiles overlap.
-
-**Limitations.** (1) The `ST` label was introduced mid-way through 2022,
-creating potential measurement error in the first data-year: pitches that
-would now be labeled ST may still carry the SL label from early 2022.
-Restricting to 2023–2024 is a natural sensitivity check. (2) The wOBA
-model pools across all count situations; count-stratified analyses may reveal
-heterogeneity masked here. (3) Chase rate conditions on out-of-zone pitches,
-which are not randomly assigned — pitchers and batters select into this sample
-— introducing potential collider bias. (4) The Kéry & Schaub flat priors on
-precisions are standard in ecological applications; their behavior on the
-logit scale for this sample size warrants sensitivity analysis.
-
-# Conclusion
-
-Whether the curveball, slider, and sweeper represent meaningfully distinct pitch
-types — or whether they are three names for points on a continuum of horizontal
-versus vertical break — is an empirical question with real consequences for
-player evaluation, pitch design, and sports analytics research. This study
-provides a principled three-stage framework for answering it. The results bear
-directly on whether analysts and front offices should treat these pitch types
-as categorically distinct inputs in outcome models, or whether continuous
-movement features are the more appropriate representation.
-
-# References
-
-<div id="refs"></div>
+**Take-home:** Paste this output (or a screenshot) back for interpretation.
+The summary table above captures the key numbers needed to evaluate whether
+the CU/SL/ST taxonomy is empirically supported.
