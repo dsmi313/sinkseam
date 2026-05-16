@@ -19,7 +19,6 @@ knitr::opts_chunk$set(
   cache   = FALSE
 )
 
-
 ```
 
 ```{r libraries}
@@ -38,13 +37,10 @@ library(ggrepel)
 
 
 
-
-
 ## Data
 
 ```{r data-pull}
 breaking <- read_csv("C:/Users/fishd/OneDrive/Manuscripts/Statcast/WD/statcast_breaking.csv")
-
 
 ```
 
@@ -54,17 +50,15 @@ count_table <- breaking |>
   tidyr::pivot_wider(names_from = pitch_type, values_from = n, values_fill = 0)
 
 kable(count_table,
-      col.names = c("Season", "CU", "SL", "ST"),
-      caption   = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper).",
+      col.names   = c("Season", "CU", "SL", "ST"),
+      caption     = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper).",
       format.args = list(big.mark = ","))
 ```
 
 
 
-
 ```{r data-prep}
-# Columns required downstream.
-REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws",
+REQUIRED_COLS <- c("pitcher", "game_year", "pitch_type", "p_throws",
                    "pfx_x", "pfx_z", "release_speed",
                    "release_spin_rate", "description")
 
@@ -72,39 +66,37 @@ breaking <- breaking |>
   dplyr::filter(pitch_type %in% c("CU", "SL", "ST")) |>
   select(any_of(REQUIRED_COLS)) |>
   mutate(
-    # Flip pfx_x for LHP so arm-side movement is consistently positive.
-    # After this: glove-side break (dominant for CU/SL/ST) is negative.
     pfx_x_adj = if_else(p_throws == "L", -pfx_x, pfx_x),
-
-    # Outcome: per-pitch whiff indicator.
-    whiff = as.integer(description == "swinging_strike"),
-
-    # Label dummies — CU is the reference category (both = 0).
-    label_sl = as.integer(pitch_type == "SL"),
-    label_st = as.integer(pitch_type == "ST"),
-
-    # Consecutive pitcher index for JAGS random effects.
-    pitcher_id = as.integer(factor(pitcher))
+    whiff     = as.integer(description == "swinging_strike"),
+    label_sl  = as.integer(pitch_type == "SL"),
+    label_st  = as.integer(pitch_type == "ST"),
+    pitcher_id = as.integer(factor(pitcher)),
+    year_f     = factor(game_year)
   ) |>
-  # Drop any row missing a feature used in PCA/GMM/JAGS.
   drop_na(pfx_x_adj, pfx_z, release_speed, release_spin_rate) |>
-  # Standardise the four movement/speed features once for reuse downstream.
   mutate(
-    pfx_x_std  = as.numeric(scale(pfx_x_adj)),
-    pfx_z_std  = as.numeric(scale(pfx_z)),
-    velo_std   = as.numeric(scale(release_speed)),
-    spin_std   = as.numeric(scale(release_spin_rate))
+    pfx_x_std = as.numeric(scale(pfx_x_adj)),
+    pfx_z_std = as.numeric(scale(pfx_z)),
+    velo_std  = as.numeric(scale(release_speed)),
+    spin_std  = as.numeric(scale(release_spin_rate))
+  ) |>
+  # Residualise year out of each feature so PCA reflects within-year
+  # movement structure rather than secular between-year trends.
+  mutate(
+    pfx_x_std = residuals(lm(pfx_x_std ~ year_f, data = pick(everything()))),
+    pfx_z_std = residuals(lm(pfx_z_std ~ year_f, data = pick(everything()))),
+    velo_std  = residuals(lm(velo_std  ~ year_f, data = pick(everything()))),
+    spin_std  = residuals(lm(spin_std  ~ year_f, data = pick(everything())))
   )
 
 cat(sprintf(
   "%s pitches kept — CU: %s  SL: %s  ST: %s  |  %s unique pitchers\n",
-  format(nrow(breaking), big.mark = ","),
-  format(sum(breaking$pitch_type == "CU"), big.mark = ","),
-  format(sum(breaking$pitch_type == "SL"), big.mark = ","),
-  format(sum(breaking$pitch_type == "ST"), big.mark = ","),
-  format(n_distinct(breaking$pitcher), big.mark = ",")
+  format(nrow(breaking),                        big.mark = ","),
+  format(sum(breaking$pitch_type == "CU"),      big.mark = ","),
+  format(sum(breaking$pitch_type == "SL"),      big.mark = ","),
+  format(sum(breaking$pitch_type == "ST"),      big.mark = ","),
+  format(n_distinct(breaking$pitcher),          big.mark = ",")
 ))
-
 
 ```
 
@@ -112,10 +104,12 @@ cat(sprintf(
 
 ## Stage 1: PCA
 
-PCA is run on the four standardised features — horizontal break (`pfx_x_adj`),
-vertical break (`pfx_z`), velocity, and spin rate — to characterise the shape
-of breaking-ball movement space. The **continuum hypothesis** predicts a single
-elongated cloud in PC space rather than three distinct clusters.
+PCA is run on four standardised features — horizontal break (`pfx_x_adj`, flipped
+for LHP so glove-side movement is consistently negative), vertical break (`pfx_z`),
+velocity, and spin rate — to characterise the shape of breaking-ball movement space.
+The **continuum hypothesis** predicts a single elongated cloud in PC space rather
+than three distinct clusters. This stage addresses **convergent validity**: do the
+three Statcast labels occupy separable regions of physical movement space?
 
 ```{r pca-fit}
 features_scaled <- breaking |>
@@ -125,20 +119,30 @@ features_scaled <- breaking |>
 rda_fit  <- rda(features_scaled)
 rda_smry <- summary(rda_fit)
 
-# Site scores (one row per pitch, PC1/PC2 columns)
+# Site scores on default vegan scale (gives sensible axis ranges)
 all_scores <- as.data.frame(scores(rda_fit, choices = 1:2)$sites)
 all_scores$pitch_type <- breaking$pitch_type
 
-# Feature loadings with Euclidean distance from origin
-loadings_raw <- as.data.frame(rda_smry$species[, 1:2])
-loadings_raw$feature <- rownames(loadings_raw)
-loadings_raw$dist    <- sqrt(loadings_raw$PC1^2 + loadings_raw$PC2^2)
-loadings_raw$label   <- recode(loadings_raw$feature,
-  pfx_x_std = "H. break",
-  pfx_z_std = "V. break",
-  velo_std  = "Velocity",
-  spin_std  = "Spin rate"
-)
+# Species scores scaled to fit inside the point cloud
+species_raw <- as.data.frame(scores(rda_fit, choices = 1:2)$species)
+species_raw$feature <- rownames(species_raw)
+
+site_range  <- max(abs(c(all_scores$PC1, all_scores$PC2)))
+spec_range  <- max(abs(c(species_raw$PC1, species_raw$PC2)))
+arrow_scale <- 1 * site_range / spec_range
+
+loadings_raw <- species_raw |>
+  mutate(
+    PC1  = PC1 * arrow_scale,
+    PC2  = PC2 * arrow_scale,
+    dist = sqrt(PC1^2 + PC2^2),
+    label = recode(feature,
+      pfx_x_std = "H. break",
+      pfx_z_std = "V. break",
+      velo_std  = "Velocity",
+      spin_std  = "Spin rate"
+    )
+  )
 
 # Variance explained
 var_exp <- rda_smry$cont$importance["Proportion Explained", ]
@@ -147,16 +151,14 @@ cum_var <- rda_smry$cont$importance["Cumulative Proportion",  ]
 
 
 
-
 ```{r pca-variance-table}
 var_tbl <- data.frame(
-  PC              = paste0("PC", 1:4),
-  `Proportion`    = round(var_exp, 3),
-  `Cumulative`    = round(cum_var, 3),
+  PC         = paste0("PC", 1:4),
+  Proportion = round(var_exp, 3),
+  Cumulative = round(cum_var, 3),
   check.names = FALSE
 )
 kable(var_tbl, caption = "Variance explained by each principal component.")
-
 
 ```
 
@@ -172,17 +174,16 @@ ldg <- loadings_raw |>
     ),
     across(where(is.numeric), ~ round(., 3))
   )
-kable(ldg, caption = "PCA species scores / loadings (vegan rda).")
+kable(ldg, caption = "PCA loadings (vegan rda).")
 ```
 
 
 
+PC1 captures the horizontal/vertical break trade-off: curveballs load heavily on
+vertical drop; sweepers load heavily on horizontal break. PC2 broadly separates
+velocity and spin from movement magnitude.
 
-PC1 typically captures the horizontal/vertical break trade-off: curveballs
-load heavily on vertical drop; sweepers load heavily on horizontal break.
-PC2 often separates velocity and spin rate from movement magnitude.
-
-```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Convex hulls mark each label's occupied region. An elongated, overlapping cloud supports the continuum hypothesis; non-overlapping hulls support distinct categories."}
+```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Convex hulls outline each label's occupied region; broadly overlapping regions support the continuum hypothesis. Arrows show feature loadings scaled to the point-cloud range."}
 set.seed(1)
 label_colours <- c(CU = "#0072B2", SL = "#D55E00", ST = "#009E73")
 label_names   <- c(CU = "Curveball", SL = "Slider",  ST = "Sweeper")
@@ -232,7 +233,6 @@ ggplot(scores_plot, aes(x = PC1, y = PC2)) +
     fill   = guide_legend(override.aes = list(alpha = 0.4))
   )
 
-
 ```
 
 ---
@@ -240,8 +240,14 @@ ggplot(scores_plot, aes(x = PC1, y = PC2)) +
 ## Stage 2: Gaussian Mixture Modelling
 
 GMM via `mclust` is applied to the same four scaled features. The number of
-components $G$ and the covariance parameterisation are selected jointly by BIC.
-Cluster–label alignment is measured with the Adjusted Rand Index (ARI).
+components $G$ and the covariance parameterisation are selected jointly by BIC,
+with no assumption that $G = 3$. Cluster–label alignment is then measured with
+the Adjusted Rand Index (ARI). This stage addresses **discriminant validity**:
+does a purely data-driven partition recover MLB's operational taxonomy?
+
+Soft posterior assignment probabilities are retained to assess classification
+certainty. If many pitches carry diffuse probabilities across components, that
+is itself evidence against hard taxonomic boundaries.
 
 ```{r gmm-fit, cache=TRUE}
 set.seed(42)
@@ -254,15 +260,16 @@ cat(sprintf("BIC-optimal: G = %d, model = %s\n",
 
 
 
-
-```{r gmm-bic-curve, fig.cap="BIC values across candidate numbers of GMM components. Each line is a covariance parameterisation; the peak marks the preferred solution."}
+```{r gmm-bic-curve, fig.cap="BIC values across candidate GMM components. Each line is a covariance parameterisation; the peak marks the preferred solution. A BIC-optimal G greater than three suggests MLB's taxonomy is a coarse discretisation of richer latent structure."}
 bic_df <- as.data.frame(bic_obj) |>
   rownames_to_column("G") |>
   mutate(G = as.integer(G)) |>
   pivot_longer(-G, names_to = "model", values_to = "BIC") |>
   filter(!is.na(BIC))
 
-bic_best <- bic_df |> group_by(G) |> slice_max(BIC, n = 1, with_ties = FALSE)
+bic_best <- bic_df |>
+  group_by(G) |>
+  slice_max(BIC, n = 1, with_ties = FALSE)
 
 ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
   geom_line(alpha = 0.4, linewidth = 0.5) +
@@ -281,10 +288,9 @@ ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
         legend.position  = "right",
         legend.text      = element_text(size = 8))
 
-
 ```
 
-```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. If clusters align with labels, each cluster region should be dominated by one colour."}
+```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. Clusters dominated by a single colour indicate label–cluster alignment; mixed-colour clusters indicate boundary ambiguity."}
 set.seed(1)
 cluster_df <- data.frame(
   PC1        = all_scores$PC1,
@@ -316,65 +322,97 @@ ggplot(cluster_df, aes(PC1, PC2)) +
 
 
 
+```{r gmm-uncertainty, fig.cap="Distribution of posterior classification uncertainty (1 minus the maximum component probability) by Statcast label. Pitches near zero are assigned with high confidence; pitches near 0.5 are genuinely ambiguous. A long right tail or a mode away from zero is consistent with a continuum rather than distinct categories."}
+uncertainty_df <- data.frame(
+  uncertainty = fit_gmm$uncertainty,
+  pitch_type  = breaking$pitch_type
+)
+
+ggplot(uncertainty_df, aes(x = uncertainty, fill = pitch_type, colour = pitch_type)) +
+  geom_histogram(binwidth = 0.02, alpha = 0.6, position = "identity") +
+  facet_wrap(~ pitch_type, ncol = 1,
+             labeller = labeller(pitch_type = label_names)) +
+  scale_fill_manual(values   = label_colours, guide = "none") +
+  scale_colour_manual(values = label_colours, guide = "none") +
+  labs(
+    x     = "Classification uncertainty (1 − max posterior probability)",
+    y     = "Count",
+    title = "GMM posterior classification uncertainty by pitch type"
+  ) +
+  theme_bw() +
+  theme(panel.grid.minor  = element_blank(),
+        strip.background  = element_blank())
+
+```
 
 ```{r gmm-ari}
 ari <- adjustedRandIndex(fit_gmm$classification, breaking$pitch_type)
 cat(sprintf("Adjusted Rand Index (GMM clusters vs. CU/SL/ST labels): %.4f\n", ari))
 
-# Contingency table
 tab <- table(Cluster = fit_gmm$classification, Label = breaking$pitch_type)
 kable(tab, caption = sprintf(
   "GMM cluster (G = %d) × Statcast label contingency table.", fit_gmm$G))
-
-
 ```
 
-**ARI interpretation:** ARI near 1 means the clusters closely recover the
-Statcast labels; ARI near 0 means the data-driven boundary has little
-correspondence to the CU/SL/ST taxonomy. An ARI below ~0.2 is consistent with
-a continuum.
+
+
+**ARI interpretation:** ARI near 1 indicates clusters closely recover the Statcast
+labels; ARI near 0 means the data-driven partition has little correspondence to
+the CU/SL/ST taxonomy. An ARI below ~0.2 is consistent with a continuum.
 
 ---
 
 ## Stage 3: Bayesian Hierarchical Model
 
-A logistic hierarchical model estimates whether the pitch-type label predicts
-whiff probability above and beyond the three movement/speed features.
-CU is the reference category; `beta_sl` and `beta_st` are the key estimands.
+A Bayesian logistic model with pitcher-level random intercepts estimates whether
+the Statcast pitch-type label predicts whiff probability above and beyond movement
+and velocity. CU is the reference category; `beta_sl` and `beta_st` are the key
+estimands. This stage addresses **predictive validity**: do the labels carry
+incremental information about outcomes once physical features are controlled?
 
 ```{r jags-prep}
 jags_df <- breaking |>
-  filter(!is.na(whiff)) |>
-  mutate(pitcher_idx = as.integer(factor(pitcher_id)))
-
+  dplyr::filter(!is.na(whiff)) |>
+  mutate(
+    pitcher_idx = as.integer(factor(pitcher_id)),
+    year_idx    = as.integer(factor(game_year))
+  )
+set.seed(99)
+jags_df <- jags_df |> slice_sample(n = 50000)
 jags_data <- list(
   Y          = jags_df$whiff,
   pfx_x_std  = jags_df$pfx_x_std,
   pfx_z_std  = jags_df$pfx_z_std,
   velo_std   = jags_df$velo_std,
+  spin_std   = jags_df$spin_std,
   label_sl   = jags_df$label_sl,
   label_st   = jags_df$label_st,
   pitcher_id = jags_df$pitcher_idx,
+  year_id    = jags_df$year_idx,
   N          = nrow(jags_df),
-  J          = max(jags_df$pitcher_idx)
+  J          = max(jags_df$pitcher_idx),
+  K          = n_distinct(jags_df$year_idx)
 )
 
-cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers\n",
+
+
+cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers, K = %s seasons\n",
             format(jags_data$N, big.mark = ","),
-            format(jags_data$J, big.mark = ",")))
+            format(jags_data$J, big.mark = ","),
+            format(jags_data$K, big.mark = ",")))
+
 ```
-
-
-
 
 ```{r jags-model-string}
 model_string <- "
 model {
   for (i in 1:N) {
     logit(p[i]) <- alpha[pitcher_id[i]] +
+                   gamma[year_id[i]]    +
                    beta_pfx_x * pfx_x_std[i] +
                    beta_pfx_z * pfx_z_std[i] +
                    beta_velo  * velo_std[i]   +
+                   beta_spin  * spin_std[i]   +
                    beta_sl    * label_sl[i]   +
                    beta_st    * label_st[i]
     Y[i] ~ dbern(p[i])
@@ -386,12 +424,18 @@ model {
     alpha[j] ~ dnorm(mu_alpha, tau_alpha)
   }
 
+  for (k in 1:K) {
+    gamma[k] ~ dnorm(0, tau_gamma)
+  }
+
   mu_alpha  ~ dnorm(0, 0.001)
   tau_alpha ~ dgamma(0.001, 0.001)
+  tau_gamma ~ dgamma(0.001, 0.001)
 
   beta_pfx_x ~ dnorm(0, 0.001)
   beta_pfx_z ~ dnorm(0, 0.001)
   beta_velo  ~ dnorm(0, 0.001)
+  beta_spin  ~ dnorm(0, 0.001)
   beta_sl    ~ dnorm(0, 0.001)
   beta_st    ~ dnorm(0, 0.001)
 }
@@ -399,24 +443,26 @@ model {
 
 model_file <- tempfile(fileext = ".jags")
 writeLines(model_string, model_file)
-
-
 ```
+
+
 
 ```{r jags-run, cache=TRUE, results='hide'}
 inits_fn <- function() list(
   beta_pfx_x = rnorm(1, 0, 0.1),
   beta_pfx_z = rnorm(1, 0, 0.1),
   beta_velo  = rnorm(1, 0, 0.1),
+  beta_spin  = rnorm(1, 0, 0.1),
   beta_sl    = rnorm(1, 0, 0.1),
   beta_st    = rnorm(1, 0, 0.1),
   mu_alpha   = rnorm(1, 0, 0.1),
-  tau_alpha  = rgamma(1, 1, 1)
+  tau_alpha  = rgamma(1, 1, 1),
+  tau_gamma  = rgamma(1, 1, 1)
 )
 
-params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
+params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo", "beta_spin",
             "beta_sl", "beta_st", "beta_st_vs_sl",
-            "mu_alpha", "tau_alpha")
+            "mu_alpha", "tau_alpha", "tau_gamma")
 
 fit_jags <- jags(
   data               = jags_data,
@@ -431,10 +477,8 @@ fit_jags <- jags(
   parallel           = TRUE,
   verbose            = FALSE
 )
+
 ```
-
-
-
 
 ```{r jags-convergence}
 rhat_vals <- unlist(fit_jags$Rhat)
@@ -447,14 +491,14 @@ cat(sprintf(
   max_rhat, n_bad, length(rhat_vals),
   if (n_bad == 0) "CONVERGED" else "NOT CONVERGED — interpret with caution"
 ))
-
-
 ```
 
+
+
 ```{r jags-posterior-table}
-target_params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo",
+target_params <- c("beta_pfx_x", "beta_pfx_z", "beta_velo", "beta_spin",
                    "beta_sl", "beta_st", "beta_st_vs_sl",
-                   "mu_alpha", "tau_alpha")
+                   "mu_alpha", "tau_alpha", "tau_gamma")
 
 post_tbl <- fit_jags$summary[target_params,
                               c("mean", "sd", "2.5%", "97.5%", "Rhat"),
@@ -466,11 +510,13 @@ post_tbl <- fit_jags$summary[target_params,
       beta_pfx_x    = "Horiz. break (β_pfx_x)",
       beta_pfx_z    = "Vert. break (β_pfx_z)",
       beta_velo     = "Velocity (β_velo)",
+      beta_spin     = "Spin rate (β_spin)",
       beta_sl       = "SL vs. CU (β_sl)",
       beta_st       = "ST vs. CU (β_st)",
       beta_st_vs_sl = "ST vs. SL (β_st − β_sl, derived)",
       mu_alpha      = "Intercept hypermean (μ_α)",
-      tau_alpha     = "Intercept precision (τ_α)"
+      tau_alpha     = "Intercept precision (τ_α)",
+      tau_gamma     = "Year RE precision (τ_γ)"
     ),
     across(where(is.numeric), ~ round(., 3))
   )
@@ -481,17 +527,15 @@ kable(
   caption   = paste(
     "Posterior summaries for the whiff model.",
     "Key estimands: β_sl (slider vs. curveball) and β_st (sweeper vs. curveball),",
-    "both controlling for movement and velocity.",
+    "controlling for horizontal break, vertical break, velocity, and spin rate.",
     "Credible intervals that include zero indicate the label adds no predictive",
-    "value beyond movement features."
+    "value beyond physical features."
   )
 )
+
 ```
 
-
-
-
-```{r jags-posterior-plot, fig.cap="Posterior distributions for the three pairwise label contrasts. The dashed line marks zero. Distributions centred on zero with 95% CIs that include zero indicate the label does not predict whiff rate beyond movement.", fig.height=4}
+```{r jags-posterior-plot, fig.cap="Posterior distributions for the three pairwise label contrasts. The dashed line marks zero. Distributions centred on zero with 95% CIs that include zero indicate the label does not predict whiff rate beyond physical features.", fig.height=4}
 extract_samples <- function(fit, param) {
   samps <- do.call(rbind, lapply(fit$samples, as.data.frame))
   samps[[param]]
@@ -506,8 +550,8 @@ contrast_df <- bind_rows(
              contrast = "ST vs. SL (derived)")
 )
 
-contrast_colours <- c("SL vs. CU"        = "#D55E00",
-                      "ST vs. CU"        = "#009E73",
+contrast_colours <- c("SL vs. CU"           = "#D55E00",
+                      "ST vs. CU"           = "#009E73",
                       "ST vs. SL (derived)" = "#CC79A7")
 
 ci_df <- contrast_df |>
@@ -537,17 +581,16 @@ ggplot(contrast_df, aes(value, fill = contrast, colour = contrast)) +
   theme(panel.grid.minor = element_blank(),
         legend.position  = "none",
         strip.background = element_blank())
-
-
 ```
+
 
 ---
 
 ## Summary
 
 ```{r summary-table}
-sl_ci <- round(fit_jags$summary["beta_sl",  c("2.5%", "97.5%")], 3)
-st_ci <- round(fit_jags$summary["beta_st",  c("2.5%", "97.5%")], 3)
+sl_ci <- round(fit_jags$summary["beta_sl",       c("2.5%", "97.5%")], 3)
+st_ci <- round(fit_jags$summary["beta_st",       c("2.5%", "97.5%")], 3)
 stvsl <- round(fit_jags$summary["beta_st_vs_sl", c("2.5%", "97.5%")], 3)
 
 summary_df <- data.frame(
@@ -555,30 +598,27 @@ summary_df <- data.frame(
                "JAGS — ST vs. SL"),
   Finding = c(
     sprintf("PC1 explains %.1f%%; PC1+PC2 = %.1f%%",
-            var_exp[1]*100, cum_var[2]*100),
+            var_exp[1] * 100, cum_var[2] * 100),
     sprintf("Optimal G = %d (%s); ARI vs. labels = %.3f",
             fit_gmm$G, fit_gmm$modelName, ari),
-    sprintf("95%% CI [%.3f, %.3f]%s",
-            sl_ci[1], sl_ci[2],
-            if(sl_ci[1] < 0 & sl_ci[2] > 0) " — includes zero" else " — excludes zero"),
-    sprintf("95%% CI [%.3f, %.3f]%s",
-            st_ci[1], st_ci[2],
-            if(st_ci[1] < 0 & st_ci[2] > 0) " — includes zero" else " — excludes zero"),
-    sprintf("95%% CI [%.3f, %.3f]%s",
-            stvsl[1], stvsl[2],
-            if(stvsl[1] < 0 & stvsl[2] > 0) " — includes zero" else " — excludes zero")
+    sprintf("95%% CI [%.3f, %.3f]%s", sl_ci[1], sl_ci[2],
+            if (sl_ci[1] < 0 & sl_ci[2] > 0) " — includes zero" else " — excludes zero"),
+    sprintf("95%% CI [%.3f, %.3f]%s", st_ci[1], st_ci[2],
+            if (st_ci[1] < 0 & st_ci[2] > 0) " — includes zero" else " — excludes zero"),
+    sprintf("95%% CI [%.3f, %.3f]%s", stvsl[1], stvsl[2],
+            if (stvsl[1] < 0 & stvsl[2] > 0) " — includes zero" else " — excludes zero")
   ),
   Interpretation = c(
-    if(cum_var[2] > 0.85) "Most variance in two dimensions — consistent with a continuum"
+    if (cum_var[2] > 0.85) "Most variance in two dimensions — consistent with a continuum"
     else "Variance spread across PCs — possible multimodal structure",
-    if(ari < 0.2) "Low ARI — clusters do not correspond to CU/SL/ST labels"
-    else if(ari < 0.5) "Moderate ARI — partial label–cluster alignment"
+    if (ari < 0.2) "Low ARI — clusters do not correspond to CU/SL/ST labels"
+    else if (ari < 0.5) "Moderate ARI — partial label–cluster alignment"
     else "High ARI — clusters align well with labels",
-    if(sl_ci[1] < 0 & sl_ci[2] > 0) "Label adds no evidence of predictive value"
+    if (sl_ci[1] < 0 & sl_ci[2] > 0) "Label adds no evidence of predictive value"
     else "Label carries incremental predictive value",
-    if(st_ci[1] < 0 & st_ci[2] > 0) "Label adds no evidence of predictive value"
+    if (st_ci[1] < 0 & st_ci[2] > 0) "Label adds no evidence of predictive value"
     else "Label carries incremental predictive value",
-    if(stvsl[1] < 0 & stvsl[2] > 0) "SL and ST not distinguishable on whiff outcomes"
+    if (stvsl[1] < 0 & stvsl[2] > 0) "SL and ST not distinguishable on whiff outcomes"
     else "SL and ST distinguishable on whiff outcomes"
   )
 )
@@ -586,8 +626,8 @@ summary_df <- data.frame(
 kable(summary_df, caption = "Summary of findings across all three analysis stages.")
 ```
 
-
-
-**Take-home:** Paste this output (or a screenshot) back for interpretation.
-The summary table above captures the key numbers needed to evaluate whether
-the CU/SL/ST taxonomy is empirically supported.
+**Take-home:** The three stages together evaluate construct validity from
+complementary angles — convergent (PCA), discriminant (GMM), and predictive
+(JAGS). Consistent evidence across all three would be needed to conclude that
+the CU/SL/ST taxonomy reflects genuine latent structure rather than a coarse
+operational discretisation of a continuous movement space.
