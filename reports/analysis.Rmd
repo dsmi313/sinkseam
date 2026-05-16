@@ -30,6 +30,8 @@ library(httr)
 library(readr)
 library(knitr)
 library(tibble)
+library(vegan)
+library(ggrepel)
 ```
 
 ## Data
@@ -169,10 +171,27 @@ features_scaled <- breaking |>
   select(pfx_x_std, pfx_z_std, velo_std, spin_std) |>
   as.matrix()
 
-pca <- prcomp(features_scaled, center = FALSE, scale. = FALSE)
+rda_fit  <- rda(features_scaled)
+rda_smry <- summary(rda_fit)
 
-var_exp <- summary(pca)$importance["Proportion of Variance", ]
-cum_var <- summary(pca)$importance["Cumulative Proportion",  ]
+# Site scores (one row per pitch, PC1/PC2 columns)
+all_scores <- as.data.frame(scores(rda_fit, choices = 1:2)$sites)
+all_scores$pitch_type <- breaking$pitch_type
+
+# Feature loadings with Euclidean distance from origin
+loadings_raw <- as.data.frame(rda_smry$species[, 1:2])
+loadings_raw$feature <- rownames(loadings_raw)
+loadings_raw$dist    <- sqrt(loadings_raw$PC1^2 + loadings_raw$PC2^2)
+loadings_raw$label   <- recode(loadings_raw$feature,
+  pfx_x_std = "H. break",
+  pfx_z_std = "V. break",
+  velo_std  = "Velocity",
+  spin_std  = "Spin rate"
+)
+
+# Variance explained
+var_exp <- rda_smry$cont$importance["Proportion Explained", ]
+cum_var <- rda_smry$cont$importance["Cumulative Proportion",  ]
 ```
 
 ```{r pca-variance-table}
@@ -186,42 +205,73 @@ kable(var_tbl, caption = "Variance explained by each principal component.")
 ```
 
 ```{r pca-loadings-table}
-ldg <- as.data.frame(round(pca$rotation, 3)) |>
-  rownames_to_column("Feature") |>
-  mutate(Feature = recode(Feature,
-    pfx_x_std = "Horiz. break (pfx_x, adj.)",
-    pfx_z_std = "Vert. break (pfx_z)",
-    velo_std  = "Release speed",
-    spin_std  = "Spin rate"
-  ))
-kable(ldg, caption = "PCA rotation matrix (loadings).")
+ldg <- loadings_raw |>
+  select(Feature = feature, PC1, PC2) |>
+  mutate(
+    Feature = recode(Feature,
+      pfx_x_std = "Horiz. break (pfx_x, adj.)",
+      pfx_z_std = "Vert. break (pfx_z)",
+      velo_std  = "Release speed",
+      spin_std  = "Spin rate"
+    ),
+    across(where(is.numeric), ~ round(., 3))
+  )
+kable(ldg, caption = "PCA species scores / loadings (vegan rda).")
 ```
 
 PC1 typically captures the horizontal/vertical break trade-off: curveballs
 load heavily on vertical drop; sweepers load heavily on horizontal break.
 PC2 often separates velocity and spin rate from movement magnitude.
 
-```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. An elongated single cloud supports the continuum hypothesis; well-separated regions support distinct categories."}
+```{r pca-scatter, fig.cap="PC1 vs PC2 coloured by Statcast pitch label. Convex hulls mark each label's occupied region. An elongated, overlapping cloud supports the continuum hypothesis; non-overlapping hulls support distinct categories."}
 set.seed(1)
-scores_df <- as.data.frame(pca$x) |>
-  mutate(pitch_type = breaking$pitch_type) |>
-  slice_sample(n = min(n(), 25000))
-
 label_colours <- c(CU = "#0072B2", SL = "#D55E00", ST = "#009E73")
 label_names   <- c(CU = "Curveball", SL = "Slider",  ST = "Sweeper")
 
-ggplot(scores_df, aes(PC1, PC2, colour = pitch_type)) +
-  geom_point(alpha = 0.15, size = 0.6) +
+scores_plot <- all_scores |> slice_sample(n = min(n(), 25000))
+
+hull_df <- scores_plot |>
+  group_by(pitch_type) |>
+  slice(chull(PC1, PC2)) |>
+  ungroup()
+
+ggplot(scores_plot, aes(x = PC1, y = PC2)) +
+  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey60") +
+  geom_vline(xintercept = 0, linetype = "dotted", colour = "grey60") +
+  geom_polygon(
+    data = hull_df,
+    aes(group = pitch_type, colour = pitch_type, fill = pitch_type),
+    alpha = 0.15
+  ) +
+  geom_point(aes(colour = pitch_type), alpha = 0.15, size = 0.5) +
+  geom_segment(
+    data = loadings_raw,
+    aes(x = 0, xend = PC1, y = 0, yend = PC2),
+    colour = "black", linewidth = 0.65, alpha = 0.55,
+    arrow = arrow(length = unit(0.01, "npc")),
+    inherit.aes = FALSE
+  ) +
+  geom_label_repel(
+    data = loadings_raw,
+    aes(x = PC1, y = PC2, label = label),
+    size = 4.35, alpha = 0.8,
+    label.padding = unit(0.35, "lines"),
+    inherit.aes = FALSE
+  ) +
   scale_colour_manual(values = label_colours, labels = label_names) +
+  scale_fill_manual(values   = label_colours, labels = label_names) +
   labs(
     x      = sprintf("PC1 (%.1f%% variance)", var_exp[1] * 100),
     y      = sprintf("PC2 (%.1f%% variance)", var_exp[2] * 100),
-    colour = NULL,
+    colour = NULL, fill = NULL,
     title  = "PCA of breaking-ball movement space (2022–2024)"
   ) +
-  theme_bw() +
-  theme(panel.grid.minor = element_blank(), legend.position = "bottom") +
-  guides(colour = guide_legend(override.aes = list(alpha = 1, size = 2)))
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "bottom") +
+  guides(
+    colour = guide_legend(override.aes = list(alpha = 1, size = 2)),
+    fill   = guide_legend(override.aes = list(alpha = 0.4))
+  )
 ```
 
 ---
@@ -271,8 +321,8 @@ ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
 ```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. If clusters align with labels, each cluster region should be dominated by one colour."}
 set.seed(1)
 cluster_df <- data.frame(
-  PC1        = pca$x[, 1],
-  PC2        = pca$x[, 2],
+  PC1        = all_scores$PC1,
+  PC2        = all_scores$PC2,
   pitch_type = breaking$pitch_type,
   cluster    = factor(fit_gmm$classification)
 ) |>
