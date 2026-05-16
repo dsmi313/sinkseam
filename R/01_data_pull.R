@@ -1,57 +1,77 @@
 # 01_data_pull.R
-# Pull CU (curveball), SL (slider), and ST (sweeper) pitches from Statcast.
-# Saves raw data to data/raw/statcast_cu_sl_st.rds.
+# Pull CU, SL, and ST pitches from Baseball Savant for 2022-2025.
+# Saves to data/raw/statcast_breaking.csv (read by reports/analysis.Rmd).
 #
-# Year range: 2022-2024.  The ST (sweeper) label did not exist before 2022, so
-# earlier seasons are excluded.  Adjust YEARS below to extend the panel.
+# Uses direct httr calls with a temp-file round-trip to avoid BOM parsing
+# errors that occur when passing the raw response text to read_csv().
 
-library(baseballr)
+library(httr)
+library(readr)
 library(dplyr)
-library(purrr)
 
-YEARS <- 2022:2024
+YEARS <- 2022:2025
 
-season_dates <- function(year) {
-  starts <- seq(
-    as.Date(paste0(year, "-04-01")),
-    as.Date(paste0(year, "-10-01")),
-    by = "month"
-  )
-  ends <- pmin(starts + 30, as.Date(paste0(year, "-10-31")))
-  data.frame(start = starts, end = ends)
+# End-of-month helper (base R only).
+eom <- function(yr, mo) {
+  as.character(as.Date(sprintf("%d-%02d-01", yr, mo %% 12 + 1)) - 1)
 }
 
-pull_year <- function(year) {
-  dates <- season_dates(year)
-  message(sprintf("Pulling %d (%d chunks)...", year, nrow(dates)))
-  map2_dfr(dates$start, dates$end, function(s, e) {
-    Sys.sleep(0.5)
-    tryCatch(
-      statcast_search(
-        start_date  = as.character(s),
-        end_date    = as.character(e),
-        player_type = "pitcher"
-      ),
-      error = function(err) {
-        warning(sprintf("Failed %s - %s: %s", s, e, conditionMessage(err)))
-        NULL
-      }
-    )
-  })
-}
-
-raw <- map_dfr(YEARS, pull_year)
-
-cu_sl_st <- raw |>
-  filter(pitch_type %in% c("CU", "SL", "ST")) |>
-  filter(!is.na(pfx_x), !is.na(pfx_z), !is.na(release_speed)) |>
-  select(
-    game_date, pitcher, batter, pitch_type, stand, p_throws,
-    release_speed, pfx_x, pfx_z,
-    release_spin_rate, release_spin_axis,
-    description, events, launch_angle, launch_speed,
-    zone, type
+pull_savant_chunk <- function(start_date, end_date) {
+  url <- paste0(
+    "https://baseballsavant.mlb.com/statcast_search/csv?all=true",
+    "&hfPT=CU%7CSL%7CST%7C",
+    "&hfGT=R%7C",
+    "&type=details",
+    "&player_type=pitcher",
+    "&game_date_gt=", start_date,
+    "&game_date_lt=", end_date,
+    "&min_pitches=0&min_results=0&min_pas=0"
   )
 
-saveRDS(cu_sl_st, "data/raw/statcast_cu_sl_st.rds")
-message(sprintf("Saved %d rows to data/raw/statcast_cu_sl_st.rds", nrow(cu_sl_st)))
+  resp <- tryCatch(
+    GET(url,
+        add_headers(`User-Agent` = "Mozilla/5.0 (compatible; R research)"),
+        timeout(120)),
+    error = function(e) NULL
+  )
+
+  if (is.null(resp) || http_error(resp)) {
+    warning(sprintf("HTTP error: %s – %s", start_date, end_date))
+    return(NULL)
+  }
+
+  tmp <- tempfile(fileext = ".csv")
+  on.exit(unlink(tmp))
+  writeBin(content(resp, as = "raw"), tmp)
+
+  tryCatch(
+    read_csv(tmp, show_col_types = FALSE, progress = FALSE),
+    error = function(e) {
+      warning(sprintf("Parse error %s – %s: %s", start_date, end_date, conditionMessage(e)))
+      NULL
+    }
+  )
+}
+
+months <- expand.grid(
+  year  = YEARS,
+  month = 4:9,
+  stringsAsFactors = FALSE
+)
+starts <- sprintf("%d-%02d-01", months$year, months$month)
+ends   <- mapply(eom, months$year, months$month)
+
+raw_list <- mapply(function(s, e) {
+  Sys.sleep(1)
+  message(sprintf("Pulling %s to %s...", s, e))
+  pull_savant_chunk(s, e)
+}, starts, ends, SIMPLIFY = FALSE)
+
+raw <- bind_rows(Filter(Negate(is.null), raw_list))
+
+message(sprintf("\nTotal rows pulled: %s", format(nrow(raw), big.mark = ",")))
+print(table(raw$pitch_type, raw$game_year))
+
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+write_csv(raw, "data/raw/statcast_breaking.csv")
+message(sprintf("Saved %s rows to data/raw/statcast_breaking.csv", format(nrow(raw), big.mark = ",")))
