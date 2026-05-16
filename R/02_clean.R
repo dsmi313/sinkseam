@@ -18,7 +18,7 @@
 
 library(dplyr)
 
-raw <- readRDS("data/raw/statcast_cu_sl_st.rds")
+raw <- readRDS("statcast_cu_sl_st.rds")
 
 # wOBA linear weights (2022-2024 average, source: FanGraphs guts page).
 WOBA_WEIGHTS <- c(

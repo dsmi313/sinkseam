@@ -1,6 +1,6 @@
 # 01_data_pull.R
 # Pull CU, SL, and ST pitches from Baseball Savant for 2023-2025.
-# Saves to data/raw/statcast_breaking.csv (read by reports/analysis.Rmd).
+# Saves to statcast_breaking.csv in the working directory.
 #
 # Uses direct httr calls with a temp-file round-trip to avoid BOM parsing
 # errors that occur when passing the raw response text to read_csv().
