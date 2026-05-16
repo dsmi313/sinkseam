@@ -64,8 +64,8 @@ REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws",
                    "release_spin_rate", "description")
 
 breaking <- breaking |>
-  select(any_of(REQUIRED_COLS)) |>
   filter(pitch_type %in% c("CU", "SL", "ST")) |>
+  select(any_of(REQUIRED_COLS)) |>
   mutate(
     # Flip pfx_x for LHP so arm-side movement is consistently positive.
     # After this: glove-side break (dominant for CU/SL/ST) is negative.
