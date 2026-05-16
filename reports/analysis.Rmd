@@ -36,82 +36,12 @@ library(ggrepel)
 
 ## Data
 
-Knit this file from the project root directory. If `data/raw/statcast_breaking.rds`
-does not exist, the chunk below pulls CU, SL, and ST pitches for 2022–2025
-directly from Baseball Savant (no baseballr required). This takes several minutes
-and requires an internet connection.
-
 ```{r data-pull}
-data_path <- file.path("data", "raw", "statcast_breaking.rds")
-
-if (!file.exists(data_path)) {
-
-  pull_savant_chunk <- function(start_date, end_date) {
-    url <- paste0(
-      "https://baseballsavant.mlb.com/statcast_search/csv?all=true",
-      "&hfPT=CU%7CSL%7CST%7C",
-      "&hfGT=R%7C",
-      "&type=details",
-      "&player_type=pitcher",
-      "&game_date_gt=", start_date,
-      "&game_date_lt=", end_date,
-      "&min_pitches=0&min_results=0&min_pas=0"
-    )
-    resp <- tryCatch(
-      GET(url,
-          add_headers(`User-Agent` = "Mozilla/5.0 (compatible; R research)"),
-          timeout(120)),
-      error = function(e) NULL
-    )
-    if (is.null(resp) || http_error(resp)) {
-      warning(sprintf("Failed: %s – %s", start_date, end_date))
-      return(NULL)
-    }
-    txt <- content(resp, as = "text", encoding = "UTF-8")
-    if (nchar(trimws(txt)) < 100 || startsWith(trimws(txt), "<")) {
-      warning(sprintf("Non-CSV response: %s – %s", start_date, end_date))
-      return(NULL)
-    }
-    tryCatch(
-      read_csv(I(txt), show_col_types = FALSE, progress = FALSE),
-      error = function(e) NULL
-    )
-  }
-
-  # Monthly chunks for the 2022-2025 regular season (April–September).
-  months <- expand.grid(
-    year  = 2022:2025,
-    month = 4:9,
-    stringsAsFactors = FALSE
-  )
-  starts <- sprintf("%d-%02d-01", months$year, months$month)
-  eom <- function(yr, mo) {
-    as.character(as.Date(sprintf("%d-%02d-01", yr, mo %% 12 + 1)) - 1)
-  }
-  ends <- mapply(eom, months$year, months$month)
-
-  raw_list <- mapply(function(s, e) {
-    Sys.sleep(1)
-    message(sprintf("Pulling %s to %s...", s, e))
-    pull_savant_chunk(s, e)
-  }, starts, ends, SIMPLIFY = FALSE)
-
-  raw <- bind_rows(Filter(Negate(is.null), raw_list))
-
-  dir.create(dirname(data_path), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(raw, data_path)
-  message(sprintf("Saved %d rows to %s", nrow(raw), data_path))
-
-  cat(sprintf("\nTotal rows: %s\n\n", format(nrow(raw), big.mark = ",")))
-  print(table(raw$pitch_type, raw$game_year))
-}
-
-breaking_raw <- readRDS(data_path)
-sprintf("Loaded %s rows, %s columns", nrow(breaking_raw), ncol(breaking_raw))
+breaking <- read_csv("data/raw/statcast_breaking.csv")
 ```
 
 ```{r pitch-counts-table}
-count_table <- breaking_raw |>
+count_table <- breaking |>
   filter(pitch_type %in% c("CU", "SL", "ST")) |>
   count(game_year, pitch_type) |>
   tidyr::pivot_wider(names_from = pitch_type, values_from = n, values_fill = 0)
@@ -128,7 +58,7 @@ REQUIRED_COLS <- c("pitcher", "pitch_type", "p_throws",
                    "pfx_x", "pfx_z", "release_speed",
                    "release_spin_rate", "description")
 
-breaking <- breaking_raw |>
+breaking <- breaking |>
   select(any_of(REQUIRED_COLS)) |>
   filter(pitch_type %in% c("CU", "SL", "ST")) |>
   mutate(
