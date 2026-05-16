@@ -18,6 +18,7 @@ knitr::opts_chunk$set(
   warning = FALSE,
   cache   = FALSE
 )
+
 ```
 
 ```{r libraries}
@@ -34,19 +35,28 @@ library(vegan)
 library(ggrepel)
 ```
 
+
+
 ## Data
 
 ```{r data-pull}
-breaking <- read_csv("C:/Users/fishd/OneDrive/Manuscripts/Statcast/WD/statcast_breaking.csv")
+breaking <- read_csv("data/raw/statcast_breaking.csv")
+
 ```
 
 ```{r pitch-counts-table}
 count_table <- breaking |>
+  filter(pitch_type %in% c("CU", "SL", "ST")) |>
   count(game_year, pitch_type) |>
   tidyr::pivot_wider(names_from = pitch_type, values_from = n, values_fill = 0)
 
-knitr::kable(count_table, caption = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper)")
+kable(count_table,
+      col.names = c("Season", "CU", "SL", "ST"),
+      caption   = "Pitch counts by type and season (CU = curveball, SL = slider, ST = sweeper).",
+      format.args = list(big.mark = ","))
 ```
+
+
 
 ```{r data-prep}
 # Columns required downstream.
@@ -90,6 +100,7 @@ cat(sprintf(
   format(sum(breaking$pitch_type == "ST"), big.mark = ","),
   format(n_distinct(breaking$pitcher), big.mark = ",")
 ))
+
 ```
 
 ---
@@ -129,6 +140,8 @@ var_exp <- rda_smry$cont$importance["Proportion Explained", ]
 cum_var <- rda_smry$cont$importance["Cumulative Proportion",  ]
 ```
 
+
+
 ```{r pca-variance-table}
 var_tbl <- data.frame(
   PC              = paste0("PC", 1:4),
@@ -137,6 +150,7 @@ var_tbl <- data.frame(
   check.names = FALSE
 )
 kable(var_tbl, caption = "Variance explained by each principal component.")
+
 ```
 
 ```{r pca-loadings-table}
@@ -153,6 +167,8 @@ ldg <- loadings_raw |>
   )
 kable(ldg, caption = "PCA species scores / loadings (vegan rda).")
 ```
+
+
 
 PC1 typically captures the horizontal/vertical break trade-off: curveballs
 load heavily on vertical drop; sweepers load heavily on horizontal break.
@@ -207,6 +223,7 @@ ggplot(scores_plot, aes(x = PC1, y = PC2)) +
     colour = guide_legend(override.aes = list(alpha = 1, size = 2)),
     fill   = guide_legend(override.aes = list(alpha = 0.4))
   )
+
 ```
 
 ---
@@ -225,6 +242,8 @@ fit_gmm <- Mclust(features_scaled, x = bic_obj, verbose = FALSE)
 cat(sprintf("BIC-optimal: G = %d, model = %s\n",
             fit_gmm$G, fit_gmm$modelName))
 ```
+
+
 
 ```{r gmm-bic-curve, fig.cap="BIC values across candidate numbers of GMM components. Each line is a covariance parameterisation; the peak marks the preferred solution."}
 bic_df <- as.data.frame(bic_obj) |>
@@ -251,6 +270,7 @@ ggplot(bic_df, aes(G, BIC, group = model, colour = model)) +
   theme(panel.grid.minor = element_blank(),
         legend.position  = "right",
         legend.text      = element_text(size = 8))
+
 ```
 
 ```{r gmm-cluster-scatter, fig.cap="GMM cluster assignments overlaid on PC space, coloured by Statcast label. If clusters align with labels, each cluster region should be dominated by one colour."}
@@ -283,6 +303,8 @@ ggplot(cluster_df, aes(PC1, PC2)) +
   )
 ```
 
+
+
 ```{r gmm-ari}
 ari <- adjustedRandIndex(fit_gmm$classification, breaking$pitch_type)
 cat(sprintf("Adjusted Rand Index (GMM clusters vs. CU/SL/ST labels): %.4f\n", ari))
@@ -291,6 +313,7 @@ cat(sprintf("Adjusted Rand Index (GMM clusters vs. CU/SL/ST labels): %.4f\n", ar
 tab <- table(Cluster = fit_gmm$classification, Label = breaking$pitch_type)
 kable(tab, caption = sprintf(
   "GMM cluster (G = %d) × Statcast label contingency table.", fit_gmm$G))
+
 ```
 
 **ARI interpretation:** ARI near 1 means the clusters closely recover the
@@ -328,6 +351,8 @@ cat(sprintf("JAGS data: N = %s pitches, J = %s pitchers\n",
             format(jags_data$J, big.mark = ",")))
 ```
 
+
+
 ```{r jags-model-string}
 model_string <- "
 model {
@@ -360,6 +385,7 @@ model {
 
 model_file <- tempfile(fileext = ".jags")
 writeLines(model_string, model_file)
+
 ```
 
 ```{r jags-run, cache=TRUE, results='hide'}
@@ -392,6 +418,8 @@ fit_jags <- jags(
 )
 ```
 
+
+
 ```{r jags-convergence}
 rhat_vals <- unlist(fit_jags$Rhat)
 rhat_vals <- rhat_vals[!is.na(rhat_vals)]
@@ -403,6 +431,7 @@ cat(sprintf(
   max_rhat, n_bad, length(rhat_vals),
   if (n_bad == 0) "CONVERGED" else "NOT CONVERGED — interpret with caution"
 ))
+
 ```
 
 ```{r jags-posterior-table}
@@ -441,6 +470,8 @@ kable(
   )
 )
 ```
+
+
 
 ```{r jags-posterior-plot, fig.cap="Posterior distributions for the three pairwise label contrasts. The dashed line marks zero. Distributions centred on zero with 95% CIs that include zero indicate the label does not predict whiff rate beyond movement.", fig.height=4}
 extract_samples <- function(fit, param) {
@@ -488,6 +519,7 @@ ggplot(contrast_df, aes(value, fill = contrast, colour = contrast)) +
   theme(panel.grid.minor = element_blank(),
         legend.position  = "none",
         strip.background = element_blank())
+
 ```
 
 ---
@@ -534,6 +566,7 @@ summary_df <- data.frame(
 
 kable(summary_df, caption = "Summary of findings across all three analysis stages.")
 ```
+
 
 **Take-home:** Paste this output (or a screenshot) back for interpretation.
 The summary table above captures the key numbers needed to evaluate whether
