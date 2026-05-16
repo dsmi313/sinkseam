@@ -85,12 +85,6 @@ if (!file.exists(data_path)) {
     stringsAsFactors = FALSE
   )
   starts <- sprintf("%d-%02d-01", months$year, months$month)
-  ends   <- format(
-    as.Date(paste0(months$year, "-", months$month, "-01")) +
-      months::month(1) - 1,
-    "%Y-%m-%d"
-  )
-  # Fallback if 'months' package unavailable: compute end-of-month manually.
   eom <- function(yr, mo) {
     as.character(as.Date(sprintf("%d-%02d-01", yr, mo %% 12 + 1)) - 1)
   }
