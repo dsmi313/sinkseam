@@ -92,7 +92,7 @@ if (!file.exists(data_path)) {
 
   raw_list <- mapply(function(s, e) {
     Sys.sleep(1)
-    message(sprintf("Pulling %s to %s", s, e))
+    message(sprintf("Pulling %s to %s...", s, e))
     pull_savant_chunk(s, e)
   }, starts, ends, SIMPLIFY = FALSE)
 
@@ -101,6 +101,9 @@ if (!file.exists(data_path)) {
   dir.create(dirname(data_path), recursive = TRUE, showWarnings = FALSE)
   saveRDS(raw, data_path)
   message(sprintf("Saved %d rows to %s", nrow(raw), data_path))
+
+  cat(sprintf("\nTotal rows: %s\n\n", format(nrow(raw), big.mark = ",")))
+  print(table(raw$pitch_type, raw$game_year))
 }
 
 breaking_raw <- readRDS(data_path)
