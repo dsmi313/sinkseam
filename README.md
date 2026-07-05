@@ -1,43 +1,54 @@
 # sinkseam
 
-Empirical evaluation of whether the **curveball (CU)**, **slider (SL)**, and
-**sweeper (ST)** represent meaningfully distinct pitch classifications in MLB
-Statcast data, or whether they form a continuum in movement space.
+**Is the sweeper a real pitch, or just a slider with a publicist?**
+
+Major League Baseball's pitch-tracking system, [Statcast](https://baseballsavant.mlb.com/),
+assigns every pitch a type label. Among breaking balls it distinguishes the
+**curveball (CU)**, the **slider (SL)**, and — since 2022 — the **sweeper (ST)**,
+a slider variant with more horizontal and less vertical break. This project
+tests empirically whether those three labels mark genuinely distinct pitch
+types, or whether they are arbitrary cut points on a continuous spectrum of
+pitch movement. It is an R analysis pipeline that pulls three seasons of
+Statcast data (2023–2025), then applies dimension reduction, model-based
+clustering, and Bayesian regression to answer one question:
 
 ## Research question
 
 Does the CU/SL/ST pitch label predict outcomes (whiff rate, chase rate, wOBA
-against) above and beyond the movement features themselves (pfx_x, pfx_z,
-release_speed)?
+against) above and beyond the movement features themselves (`pfx_x`, `pfx_z`,
+`release_speed`)?
 
 ## Key claim under test
 
 The movement space from curveball (high vertical drop, low horizontal break) to
 sweeper (high horizontal break, low vertical drop) is theoretically continuous.
 The PCA and GMM stages test whether there are natural cluster boundaries at the
-SL and ST divisions.  The Bayesian model tests whether the labels carry
+SL and ST divisions. The Bayesian model tests whether the labels carry
 incremental outcome predictability.
 
 ## Three-stage analysis
 
-1. **PCA** (`prcomp`) on pfx_x (sign-adjusted for handedness), pfx_z, and
+1. **PCA** (`prcomp`) on `pfx_x` (sign-adjusted for handedness), `pfx_z`, and
    release speed — is the cloud elongated (continuum) or trimodal (categories)?
 2. **GMM** (`mclust`, G = 2..8 + forced G=3) — do data-driven clusters align
-   with CU/SL/ST labels (ARI)?
-3. **Bayesian hierarchical regression** (JAGS via `jagsUI`) — do `beta_sl`,
+   with the CU/SL/ST labels (adjusted Rand index)?
+3. **Bayesian hierarchical regression** (JAGS via `jagsUI`) — controlling for
+   movement, velocity, spin, count, and handedness matchup, do `beta_sl`,
    `beta_st`, and the derived `beta_st_vs_sl = beta_st - beta_sl` have credible
-   intervals that exclude zero?  CU is the reference category.
+   intervals that exclude zero? CU is the reference category.
+
+If the PCA shows a continuum, the GMM clusters don't align with the labels,
+and all three credible intervals include zero, the three-way taxonomy is
+unsupported by the data.
 
 ## Repo layout
 
 ```
 sinkseam/
-├── data/
-│   ├── raw/       # statcast_cu_sl_st.rds  (git-ignored)
-│   └── clean/     # cu_sl_st_clean.rds, pca_results.rds,
-│                  # gmm_results.rds, jags_results.rds
+├── statcast_breaking.csv  # git-ignored; written by R/01_data_pull.R
+├── data/clean/            # git-ignored; intermediate .rds files from R/ scripts
 ├── R/
-│   ├── 01_data_pull.R    – baseballr pull, CU+SL+ST filter, 2022-2024
+│   ├── 01_data_pull.R    – httr pull from Baseball Savant, CU+SL+ST, 2023–2025
 │   ├── 02_clean.R        – feature engineering, dummy labels, outcomes
 │   ├── 03_pca.R          – PCA on movement features, biplot data
 │   ├── 04_gmm.R          – GMM G=2/3/BIC, ARI, contingency tables
@@ -61,22 +72,27 @@ knit** (PCA → GMM → JAGS) and outputs HTML. Use this for exploratory work
 and sharing results.
 
 ```r
+source("R/01_data_pull.R")   # one-time: pull the raw data (internet required)
+# then point the read_csv() call at the top of reports/analysis.Rmd
+# at the statcast_breaking.csv it just wrote
 rmarkdown::render("reports/analysis.Rmd", output_dir = "reports")
 ```
 
 **What it needs:**
 
 - R packages: `dplyr`, `tidyr`, `ggplot2`, `mclust`, `jagsUI`, `httr`,
-  `readr`, `knitr`, `tibble` — no `baseballr` required.
+  `readr`, `knitr`, `tibble`, `vegan`, `ggrepel`.
 - JAGS ≥ 4.3 installed system-wide (see link below).
 - Knit from the **project root** so relative paths resolve correctly.
 
-**Data:** if `data/raw/statcast_breaking.rds` already exists it is loaded
-directly. If not, the Rmd pulls CU/SL/ST pitches for 2022–2024 directly
-from Baseball Savant via `httr` (no baseballr) and saves the file.
+**Data:** the Rmd reads `statcast_breaking.csv`, which is created by
+`R/01_data_pull.R` (regular-season CU/SL/ST pitches, April–September
+2023–2025, pulled month-by-month from Baseball Savant via `httr`). Run the
+pull script once before the first knit, and update the `read_csv()` path in
+the Rmd's `data-pull` chunk to wherever the file landed on your machine.
 
-The JAGS chunk is marked `cache = TRUE` so subsequent knits skip the
-~20–60 min MCMC step.
+The GMM and JAGS chunks are marked `cache=TRUE` so subsequent knits skip the
+slowest steps (the MCMC run takes ~20–60 min).
 
 **Output:** a summary table at the bottom of the HTML report captures all
 three key results (PC1 variance share, ARI, and the three credible intervals)
@@ -125,7 +141,7 @@ true SL/ST boundary).
 
 | Parameter | File | Variable |
 |---|---|---|
-| Year range | `R/01_data_pull.R` | `YEARS <- 2022:2024` |
+| Year range | `R/01_data_pull.R` | `YEARS <- 2023:2025` |
 | Spin axis in PCA | `R/03_pca.R` | `INCLUDE_SPIN_AXIS` |
 | Spin axis in GMM | `R/04_gmm.R` | `INCLUDE_SPIN_AXIS` |
 | wOBA weights | `R/02_clean.R` | `WOBA_WEIGHTS` (update from FanGraphs) |
@@ -135,9 +151,10 @@ true SL/ST boundary).
 
 ```r
 install.packages(c(
-  "baseballr", "dplyr", "purrr", "mclust",
+  "httr", "readr", "dplyr", "purrr", "tidyr", "tibble",
+  "mclust", "vegan",
   "jagsUI",    # also requires standalone JAGS >= 4.3
-  "ggplot2", "tidyr", "tibble",
+  "ggplot2", "ggrepel",
   "shiny", "rmarkdown", "bookdown", "knitr", "kableExtra", "here"
 ))
 ```
