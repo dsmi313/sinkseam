@@ -5,22 +5,30 @@
 # Reference category: CU (curveball).  label_sl and label_st are binary
 # indicators passed from R; when both are 0 the pitch is a curveball.
 #
+# Confounders:
+#   spin_axis_z  – standardized spin axis in degrees (mechanistic separator)
+#   same_hand    – 1 if pitcher and batter share handedness, 0 otherwise
+#   two_strike   – 1 if 2-strike count, 0 otherwise
+#
 # Key estimands:
-#   beta_sl        – SL vs CU effect on log-odds (controlling for movement)
-#   beta_st        – ST vs CU effect on log-odds (controlling for movement)
+#   beta_sl        – SL vs CU on log-odds (controlling for movement, speed, spin, count, matchup)
+#   beta_st        – ST vs CU on log-odds (controlling for movement, speed, spin, count, matchup)
 #   beta_st_vs_sl  – derived contrast: ST vs SL (= beta_st - beta_sl)
 #
-# Priors follow Kery & Schaub (2012): flat Normal (precision = 0.001) for
-# fixed effects and hypermean; Gamma(0.001, 0.001) for precisions.
+# Priors: weakly informative N(0, 1) on log-odds scale for all fixed effects
+# (Gelman et al. 2008); Gamma(0.001, 0.001) for precision parameters.
 
 model {
   for (i in 1:N) {
     logit(p[i]) <- alpha[pitcher_id[i]] +
-                   beta_pfx_x * pfx_x_z[i] +
-                   beta_pfx_z * pfx_z_z[i] +
-                   beta_speed  * speed_z[i]  +
-                   beta_sl    * label_sl[i] +
-                   beta_st    * label_st[i]
+                   beta_pfx_x    * pfx_x_z[i]     +
+                   beta_pfx_z    * pfx_z_z[i]     +
+                   beta_speed    * speed_z[i]      +
+                   beta_spin     * spin_axis_z[i]  +
+                   beta_same_hand * same_hand[i]   +
+                   beta_2strike  * two_strike[i]   +
+                   beta_sl       * label_sl[i]     +
+                   beta_st       * label_st[i]
 
     Y[i] ~ dbern(p[i])
   }
@@ -35,9 +43,12 @@ model {
   mu_alpha  ~ dnorm(0, 0.001)
   tau_alpha ~ dgamma(0.001, 0.001)
 
-  beta_pfx_x ~ dnorm(0, 0.001)
-  beta_pfx_z ~ dnorm(0, 0.001)
-  beta_speed ~ dnorm(0, 0.001)
-  beta_sl    ~ dnorm(0, 0.001)
-  beta_st    ~ dnorm(0, 0.001)
+  beta_pfx_x    ~ dnorm(0, 1)
+  beta_pfx_z    ~ dnorm(0, 1)
+  beta_speed    ~ dnorm(0, 1)
+  beta_spin     ~ dnorm(0, 1)
+  beta_same_hand ~ dnorm(0, 1)
+  beta_2strike  ~ dnorm(0, 1)
+  beta_sl       ~ dnorm(0, 1)
+  beta_st       ~ dnorm(0, 1)
 }

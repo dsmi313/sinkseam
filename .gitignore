@@ -1,0 +1,16 @@
+# Local assistant instructions
+CLAUDE.md
+
+# R session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Pulled Statcast data and intermediates (regenerate with the R/ pipeline)
+statcast_breaking.csv
+data/
+
+# Knitted report output and cache
+reports/analysis.html
+reports/*_cache/
+reports/*_files/

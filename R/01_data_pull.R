@@ -1,6 +1,6 @@
 # 01_data_pull.R
-# Pull CU, SL, and ST pitches from Baseball Savant for 2022-2025.
-# Saves to data/raw/statcast_breaking.csv (read by reports/analysis.Rmd).
+# Pull CU, SL, and ST pitches from Baseball Savant for 2023-2025.
+# Saves to statcast_breaking.csv in the working directory.
 #
 # Uses direct httr calls with a temp-file round-trip to avoid BOM parsing
 # errors that occur when passing the raw response text to read_csv().
@@ -9,7 +9,7 @@ library(httr)
 library(readr)
 library(dplyr)
 
-YEARS <- 2022:2025
+YEARS <- 2023:2025
 
 # End-of-month helper (base R only).
 eom <- function(yr, mo) {
@@ -72,6 +72,5 @@ raw <- bind_rows(Filter(Negate(is.null), raw_list))
 message(sprintf("\nTotal rows pulled: %s", format(nrow(raw), big.mark = ",")))
 print(table(raw$pitch_type, raw$game_year))
 
-dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
-write_csv(raw, "data/raw/statcast_breaking.csv")
-message(sprintf("Saved %s rows to data/raw/statcast_breaking.csv", format(nrow(raw), big.mark = ",")))
+write_csv(raw, "statcast_breaking.csv")
+message(sprintf("Saved %s rows to statcast_breaking.csv", format(nrow(raw), big.mark = ",")))

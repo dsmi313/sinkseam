@@ -7,19 +7,19 @@
 # trade-off between vertical drop (CU end) and horizontal break (ST end),
 # producing one elongated cloud in PC space rather than three separable clusters.
 #
-# Set INCLUDE_SPIN_AXIS = TRUE to add spin axis as a 4th feature (see concept
-# paper open question on whether spin axis is the defining ST/SL boundary).
-#
 # Saves: data/clean/pca_results.rds
 
 library(dplyr)
 
-INCLUDE_SPIN_AXIS <- FALSE
-
 clean <- readRDS("data/clean/cu_sl_st_clean.rds")
 
-feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z")
-if (INCLUDE_SPIN_AXIS) feature_cols <- c(feature_cols, "spin_axis_z")
+# Feature selection rationale: pfx_x, pfx_z, and release_speed directly capture
+# the Magnus-force-induced movement and velocity that define breaking-ball identity.
+# spin_axis_z is included as a 4th feature because spin axis (0-360°) mechanistically
+# separates pitch types: curveballs spin near 6 o'clock (~180°), sliders near
+# 3-4 o'clock, sweepers even flatter.  Release angle and extension are excluded
+# because they reflect delivery mechanics, not pitch-in-flight trajectory.
+feature_cols <- c("pfx_x_z", "pfx_z_z", "speed_z", "spin_axis_z")
 
 # Keep only complete cases for the chosen features.
 complete_mask <- complete.cases(clean[, feature_cols])
@@ -30,7 +30,7 @@ message(sprintf(
   nrow(features), paste(feature_cols, collapse = ", ")
 ))
 
-# Features are already standardized (mean=0, SD=1), so no rescaling needed.
+set.seed(2025)
 pca <- prcomp(features, center = FALSE, scale. = FALSE)
 
 var_exp <- summary(pca)$importance["Proportion of Variance", ]
@@ -53,8 +53,7 @@ pca_results <- list(
   scores_df         = scores_df,
   var_exp           = var_exp,
   cum_var           = cum_var,
-  feature_cols      = feature_cols,
-  include_spin_axis = INCLUDE_SPIN_AXIS
+  feature_cols = feature_cols
 )
 
 saveRDS(pca_results, "data/clean/pca_results.rds")
